@@ -22,8 +22,9 @@ def setup_tc(interface, download_bytes_per_sec, upload_bytes_per_sec):
 
     run_cmd(f"tc qdisc del dev {interface} ingress 2>/dev/null")
     run_cmd(f"tc qdisc del dev ifb0 root 2>/dev/null")
-    run_cmd(f"modprobe ifb")
-    run_cmd(f"ip link set ifb0 up")
+    run_cmd("modprobe ifb")
+    run_cmd("ip link add ifb0 type ifb 2>/dev/null")
+    run_cmd("ip link set ifb0 up")
     run_cmd(f"tc qdisc add dev {interface} ingress")
     run_cmd(f"tc filter add dev {interface} parent ffff: protocol ip u32 match u32 0 0 action mirred egress redirect dev ifb0")
 

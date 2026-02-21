@@ -19,4 +19,4 @@ def measure_total_bandwidth():
     
     return download_bytes_per_sec, upload_bytes_per_sec
 
-download_pool, upload_pool = measure_total_bandwidth()
+# download_pool, upload_pool = measure_total_bandwidth()    #the same funciton is running in main.py in line 11: DOWN_BPS, UP_BPS = measure_total_bandwidth()

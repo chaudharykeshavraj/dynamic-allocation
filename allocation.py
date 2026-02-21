@@ -19,8 +19,8 @@ def allocate(all_devices, download_bytes_per_sec, upload_bytes_per_sec):
     traffic_max_upload   = EPS
 
     for device in all_devices:
-        traffic_max_download = max(traffic_max_download, device['down_bytes_per_sec'])
-        traffic_max_upload   = max(traffic_max_upload,   device['up_bytes_per_sec'])
+        traffic_max_download = max(traffic_max_download, device['down_bytes'])
+        traffic_max_upload   = max(traffic_max_upload,   device['up_bytes'])
 
     total_minimum_download_allocated = 0.0
     total_minimum_upload_allocated   = 0.0
@@ -30,10 +30,10 @@ def allocate(all_devices, download_bytes_per_sec, upload_bytes_per_sec):
     for device in all_devices:
 
         activity_factor_download = BETA + (1 - BETA) * (
-            device['down_bytes_per_sec'] / traffic_max_download
+            device['down_bytes'] / traffic_max_download
         )
         activity_factor_upload = BETA + (1 - BETA) * (
-            device['up_bytes_per_sec'] / traffic_max_upload
+            device['up_bytes'] / traffic_max_upload
         )
 
         # clamp for safety
@@ -49,8 +49,8 @@ def allocate(all_devices, download_bytes_per_sec, upload_bytes_per_sec):
         total_minimum_download_allocated += min_down
         total_minimum_upload_allocated   += min_up
 
-        total_weighted_demand_download += device['priority'] * device['down_bytes_per_sec']
-        total_weighted_demand_upload   += device['priority'] * device['up_bytes_per_sec']
+        total_weighted_demand_download += device['priority'] * device['down_bytes']
+        total_weighted_demand_upload   += device['priority'] * device['up_bytes']
 
     # -------------------------------------------------
     # Capacity guard — scale ONLY if exceeding
@@ -81,7 +81,7 @@ def allocate(all_devices, download_bytes_per_sec, upload_bytes_per_sec):
     else:
         denom = total_weighted_demand_download + EPS
         for device in all_devices:
-            weight = device['priority'] * device['down_bytes_per_sec']
+            weight = device['priority'] * device['down_bytes']
             device['allocated_bytes_download'] += (weight / denom) * remaining_download
 
     # ---- Upload ----
@@ -92,7 +92,7 @@ def allocate(all_devices, download_bytes_per_sec, upload_bytes_per_sec):
     else:
         denom = total_weighted_demand_upload + EPS
         for device in all_devices:
-            weight = device['priority'] * device['up_bytes_per_sec']
+            weight = device['priority'] * device['up_bytes']
             device['allocated_bytes_upload'] += (weight / denom) * remaining_upload
 
     # =================================================
