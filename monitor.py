@@ -8,6 +8,7 @@ PROTOCOL_PRIORITY = {
     "SKYPE"          : 5,
     "GOOGLE_MEET"    : 5,
     "DISCORD"        : 5,
+    "VOIP"           : 5,
     "STEAM"          : 4,
     "XBOX"           : 4,
     "PLAYSTATION"    : 4,
@@ -56,7 +57,7 @@ def detect_protocol(pkt):
         # If nDPI fails for any reason, return UNKNOWN
         return "UNKNOWN"
 
-def measure_bandwidth(interface='wlan0', interval=5):
+def measure_bandwidth(interface='wlp3s0', interval=5):
 
     while True:
 
@@ -142,11 +143,12 @@ def measure_bandwidth(interface='wlan0', interval=5):
 
             device = {
                 "ip"               : ip,
-                "up_bytes"         : up,
-                "down_bytes"       : down,
+                "up_bytes"         : up/interval,
+                "down_bytes"       : down/interval,
                 "protocol"         : detected_protocol,   # what app they are using
                 "priority"         : auto_priority,       # auto assigned!
-                "allocated_bytes"  : 0
+                "allocated_bytes_download"  : 0,
+                "allocated_bytes_upload"  : 0
             }
 
             all_devices.append(device)
@@ -165,4 +167,4 @@ def measure_bandwidth(interface='wlan0', interval=5):
 
         print(f"{'='*75}\n")
 
-measure_bandwidth(interface='wlan0', interval=5)
+measure_bandwidth(interface='wlp3s0', interval=5)
