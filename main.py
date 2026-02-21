@@ -15,7 +15,7 @@ print(f"Upload pool   = {(UP_BPS   * 8) / 1_000_000:.2f} Mbps")
 
 while True:
 
-    print("\n--- Step 1: Monitoring ---")
+    print("\n Step 1: Monitoring ")
     all_devices = monitor(INTERFACE, INTERVAL)
 
     if len(all_devices) == 0:
@@ -24,10 +24,10 @@ while True:
 
     print(f"Found {len(all_devices)} device(s)")
 
-    print("\n--- Step 2: Allocating ---")
+    print("\ Step 2: Allocating")
     all_devices = allocate(all_devices, DOWN_BPS, UP_BPS)
 
-    print("\n--- Step 3: Enforcing ---")
+    print("\nStep 3: Enforcing")
     enforce(all_devices, INTERFACE, DOWN_BPS, UP_BPS)
 
-    print("\n--- Cycle complete, starting next ---")
+    print("\nCycle complete, starting next")
