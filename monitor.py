@@ -162,11 +162,11 @@ def aggregate_flows(flows):
         up_bytes   = xfer.get('src2dst_bytes', 0)
         down_bytes = xfer.get('dst2src_bytes', 0)
 
-        if src_ip and src_ip.startswith('192.168.'):
+        if src_ip and src_ip.startswith('192.168.') and src_ip != '192.168.4.1':   # exclude router's own traffic i.e. gateway IP
             devices[src_ip]['up']               += up_bytes
             devices[src_ip]['protocols'][proto] += up_bytes
 
-        if dst_ip and dst_ip.startswith('192.168.'):
+        if dst_ip and dst_ip.startswith('192.168.') and dst_ip != '192.168.4.1':   # exclude router's own traffic i.e. gateway IP
             devices[dst_ip]['down']               += down_bytes
             devices[dst_ip]['protocols'][proto]   += down_bytes
 
@@ -183,12 +183,12 @@ def monitor(interface='wlp3s0', interval=5):
             dst_ip = pkt[IP].dst
             size   = len(pkt)
 
-            if src_ip.startswith("192.168."):
+            if src_ip.startswith("192.168.") and src_ip != "192.168.4.1":   # exclude router's own traffic i.e. gateway IP
                 if src_ip not in tx_bytes:
                     tx_bytes[src_ip] = 0
                 tx_bytes[src_ip] = tx_bytes[src_ip] + size
 
-            if dst_ip.startswith("192.168."):
+            if dst_ip.startswith("192.168.") and dst_ip != "192.168.4.1":   # exclude router's own traffic i.e. gateway IP
                 if dst_ip not in rx_bytes:
                     rx_bytes[dst_ip] = 0
                 rx_bytes[dst_ip] = rx_bytes[dst_ip] + size

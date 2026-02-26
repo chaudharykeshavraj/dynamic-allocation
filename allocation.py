@@ -2,19 +2,23 @@ def allocate(all_devices, download_bytes_per_sec, upload_bytes_per_sec):
     ALPHA = 0.2
     BETA  = 0.1
     EPS   = 1e-9
-
+    
     number_of_devices = len(all_devices)
     if number_of_devices == 0:
         return all_devices
 
-   
+    # dynamic ceiling factor — shrinks headroom as more devices compete
+    # 1 device → 2.0, 2 → 1.5, 4 → 1.25, 8 → 1.125
+    # floor of 1.1 ensures minimum 10% headroom for bursty traffic
+    DEMAND_CEIL_FACTOR = max(1.1, 1.0 + (1.0 / number_of_devices))
+
     fair_share_download = download_bytes_per_sec / number_of_devices
     fair_share_upload   = upload_bytes_per_sec   / number_of_devices
 
     full_minimum_allocation_download = fair_share_download * ALPHA
     full_minimum_allocation_upload   = fair_share_upload   * ALPHA
 
-  
+
     traffic_max_download = EPS
     traffic_max_upload   = EPS
 
@@ -94,6 +98,70 @@ def allocate(all_devices, download_bytes_per_sec, upload_bytes_per_sec):
         for device in all_devices:
             weight = device['priority'] * device['up_bytes_per_sec']
             device['allocated_bytes_upload'] += (weight / denom) * remaining_upload
+
+    # -------------------------------------------------
+    # Pool usage check — only cap when pool is busy
+    # If total demand is below 70% of pool, there is enough
+    # bandwidth for everyone — no need to cap and risk the
+    # feedback loop (tc caps throughput → monitor reads capped
+    # value → allocation stays low → device starves).
+    # -------------------------------------------------
+    POOL_BUSY_THRESHOLD = 0.7
+    total_demand_down = sum(d['down_bytes_per_sec'] for d in all_devices)
+    total_demand_up   = sum(d['up_bytes_per_sec']   for d in all_devices)
+
+    pool_busy_down = total_demand_down > (download_bytes_per_sec * POOL_BUSY_THRESHOLD)
+    pool_busy_up   = total_demand_up   > (upload_bytes_per_sec   * POOL_BUSY_THRESHOLD)
+
+    # -------------------------------------------------
+    # Phase 3 — Demand ceiling cap (only when pool is busy)
+    # No device gets more than DEMAND_CEIL_FACTOR × its demand
+    # Excess is collected as spare for redistribution
+    # -------------------------------------------------
+    spare_download = 0.0
+    spare_upload   = 0.0
+    capped_down    = set()
+    capped_up      = set()
+
+    for i, device in enumerate(all_devices):
+        if pool_busy_down:
+            ceil_down = device['down_bytes_per_sec'] * DEMAND_CEIL_FACTOR
+            if device['allocated_bytes_download'] > ceil_down and device['down_bytes_per_sec'] > EPS:
+                spare_download += device['allocated_bytes_download'] - ceil_down
+                device['allocated_bytes_download'] = ceil_down
+                capped_down.add(i)
+
+        if pool_busy_up:
+            ceil_up = device['up_bytes_per_sec'] * DEMAND_CEIL_FACTOR
+            if device['allocated_bytes_upload'] > ceil_up and device['up_bytes_per_sec'] > EPS:
+                spare_upload += device['allocated_bytes_upload'] - ceil_up
+                device['allocated_bytes_upload'] = ceil_up
+                capped_up.add(i)
+
+    # -------------------------------------------------
+    # Phase 4 — Redistribute spare to uncapped devices
+    # Weighted by priority × demand
+    # -------------------------------------------------
+    uncapped_demand_down = sum(
+        d['priority'] * d['down_bytes_per_sec']
+        for i, d in enumerate(all_devices) if i not in capped_down
+    )
+    uncapped_demand_up = sum(
+        d['priority'] * d['up_bytes_per_sec']
+        for i, d in enumerate(all_devices) if i not in capped_up
+    )
+
+    if spare_download > 0 and uncapped_demand_down > EPS:
+        for i, device in enumerate(all_devices):
+            if i not in capped_down:
+                weight = device['priority'] * device['down_bytes_per_sec']
+                device['allocated_bytes_download'] += (weight / uncapped_demand_down) * spare_download
+
+    if spare_upload > 0 and uncapped_demand_up > EPS:
+        for i, device in enumerate(all_devices):
+            if i not in capped_up:
+                weight = device['priority'] * device['up_bytes_per_sec']
+                device['allocated_bytes_upload'] += (weight / uncapped_demand_up) * spare_upload
 
     # =================================================
     # FINAL NORMALIZATION — HARD CAP GUARANTEE

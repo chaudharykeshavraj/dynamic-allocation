@@ -1,0 +1,77 @@
+import os
+from flask import Flask, render_template, jsonify
+from datetime import datetime
+
+live_state = {
+    'devices'   : [],
+    'down_mbps' : 0.0,
+    'up_mbps'   : 0.0,
+    'updated'   : None,
+}
+
+app = Flask(__name__, template_folder=os.path.join(os.path.dirname(__file__), 'templates'))
+
+# Tolerance for enforcement  match check
+MATCH_TOLERANCE = 0.10
+
+@app.route('/')
+def dashboard():
+
+    devices = []
+
+    for device in live_state['devices']:
+        allocated_down_bps  = device.get('allocated_bytes_download', 0)
+        allocated_up_bps    = device.get('allocated_bytes_upload', 0)
+        demand_bps          = device.get('down_bytes_per_sec', 0) + device.get('up_bytes_per_sec', 0)
+
+        # enforced values written by enforce.py
+        enforced_down_bps = device.get('enforced_down_bps', 0)
+        enforced_up_bps   = device.get('enforced_up_bps', 0)
+
+        allocated_total = allocated_down_bps + allocated_up_bps
+        enforced_total  = enforced_down_bps + enforced_up_bps
+
+        # check if enforcement matches allocation within tolerance
+        if allocated_total > 0:
+            deviation   = abs(enforced_total - allocated_total) / allocated_total
+            is_match    = deviation <= MATCH_TOLERANCE
+        else:
+            is_match = True  # if no allocation, nothing to match
+
+        devices.append({
+            'ip'                : device.get('ip', ''),
+            'protocol'          : device.get('protocol', 'UNKNOWN'),
+            'priority'          : device.get('priority', 1),
+            'demand'            : round((demand_bps * 8) / 1_000_000, 2),  # convert to Mbps
+            'allocated'         : round(allocated_total * 8) / 1_000_000,
+            'down_allocated'    : round(allocated_down_bps * 8) / 1_000_000,
+            'up_allocated'      : round(allocated_up_bps * 8) / 1_000_000,
+            'enforced'          : round(enforced_total * 8) / 1_000_000,
+            'enforced_down'     : round(enforced_down_bps * 8) / 1_000_000,
+            'enforced_up'       : round(enforced_up_bps * 8) / 1_000_000, 
+            'is_match'          : is_match,
+            'status'            : 'active' if demand_bps > 0 else 'idle',
+        })
+
+    updated = live_state['updated']
+    totals = {
+        'devices'       : len(devices),
+        'demand'        : sum(d['demand'] for d in devices),
+        'allocated'     : sum(d['allocated'] for d in devices),
+        'enforced'      : sum(d['enforced'] for d in devices),
+        'down_pool'     : round(live_state['down_mbps'], 2),
+        'up_pool'       : round(live_state['up_mbps'], 2),
+        'time'          : updated.strftime('%Y-%m-%d %H:%M:%S') if updated else "-",
+        'date'          : updated.strftime('%Y-%m-%d') if updated else "-",
+    }
+
+    return render_template('dashboard.html', devices=devices, totals=totals)
+
+@app.route('/api/status')
+def api_status():
+    updated = live_state['updated']
+    return jsonify({
+        'status'    : 'running',
+        'devices'   : len(live_state['devices']),
+        'timestamp' : updated.isoformat() if updated else None,
+    })

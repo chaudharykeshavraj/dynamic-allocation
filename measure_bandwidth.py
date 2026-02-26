@@ -2,7 +2,7 @@ import speedtest
 
 def measure_total_bandwidth():
     
-    st = speedtest.Speedtest()
+    st = speedtest.Speedtest(secure=True)
     
     print("Measuring download speed...")
     download_bps = st.download()   # bits per second
