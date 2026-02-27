@@ -2,6 +2,7 @@ def allocate(all_devices, download_bytes_per_sec, upload_bytes_per_sec):
     ALPHA = 0.2
     BETA  = 0.1
     EPS   = 1e-9
+    IDLE_THRESHOLD = 1024      # 1 KB/sec — for background traffic
     
     number_of_devices = len(all_devices)
     if number_of_devices == 0:
@@ -125,15 +126,15 @@ def allocate(all_devices, download_bytes_per_sec, upload_bytes_per_sec):
 
     for i, device in enumerate(all_devices):
         if pool_busy_down:
-            ceil_down = device['down_bytes_per_sec'] * DEMAND_CEIL_FACTOR
-            if device['allocated_bytes_download'] > ceil_down and device['down_bytes_per_sec'] > EPS:
+            ceil_down = max(device['down_bytes_per_sec'] * DEMAND_CEIL_FACTOR, fair_share_download)
+            if device['allocated_bytes_download'] > ceil_down and device['down_bytes_per_sec'] > IDLE_THRESHOLD:
                 spare_download += device['allocated_bytes_download'] - ceil_down
                 device['allocated_bytes_download'] = ceil_down
                 capped_down.add(i)
 
         if pool_busy_up:
-            ceil_up = device['up_bytes_per_sec'] * DEMAND_CEIL_FACTOR
-            if device['allocated_bytes_upload'] > ceil_up and device['up_bytes_per_sec'] > EPS:
+            ceil_up = max(device['up_bytes_per_sec'] * DEMAND_CEIL_FACTOR, fair_share_upload)
+            if device['allocated_bytes_upload'] > ceil_up and device['up_bytes_per_sec'] > IDLE_THRESHOLD:
                 spare_upload += device['allocated_bytes_upload'] - ceil_up
                 device['allocated_bytes_upload'] = ceil_up
                 capped_up.add(i)
