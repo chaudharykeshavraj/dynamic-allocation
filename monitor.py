@@ -10,16 +10,12 @@ from collections import defaultdict
 PROTOCOL_PRIORITY = {
     "WHATSAPP_CALL"  : 5,
     "ZOOM"           : 5,
-    "SKYPE"          : 5,
     "GOOGLE_MEET"    : 5,
     "DISCORD"        : 5,
     "VIBER_MESSAGE"  : 2,
     "VIBER_CALL"     : 5,
     "RTP"            : 5,
     "STEAM"          : 4,
-    "XBOX"           : 4,
-    "PLAYSTATION"    : 4,
-    "ROBLOX"         : 4,
     "YOUTUBE"        : 3,
     "NETFLIX"        : 3,
     "TIKTOK"         : 3,
@@ -28,17 +24,11 @@ PROTOCOL_PRIORITY = {
     "TWITTER"        : 2,
     "HTTP"           : 2,
     "HTTPS"          : 2,
-    "BITTORRENT"     : 1,
-    "UNKNOWN"        : 1,
-    "BLIZZARD"       : 4,
-    "EPICGAMES"      : 4,
-    "RIOTGAMES"      : 4,
-    "GEFORCENOW"     : 4,
-    "PATHOFEXILE"    : 4,
-    "GAMES"          : 4,
     "GOOGLE_DRIVE"   : 2,
     "ONEDRIVE"       : 2,
-    "CDN_DOWNLOAD"   : 2,
+    "BITTORRENT"     : 1,
+    "CDN_DOWNLOAD"   : 1,
+    "UNKNOWN"        : 1,
 }
 
 NFSTREAM_TO_PROTOCOL = {
@@ -56,7 +46,6 @@ NFSTREAM_TO_PROTOCOL = {
     "YouTube"            : "YOUTUBE",
     "Youtube"            : "YOUTUBE",
     "YouTube_QUIC"       : "YOUTUBE",
-    "QUIC"               : "YOUTUBE",
     "Google_QUIC"        : "YOUTUBE",
     "QUIC.YouTube"       : "YOUTUBE",
     # WhatsApp
@@ -71,23 +60,20 @@ NFSTREAM_TO_PROTOCOL = {
     # VoIP/Real-time protocols
     "RTP"                : "RTP",
     "RTCP"               : "RTP",
-    "SIP"                : "VOIP",
+    "SIP"                : "RTP",
     # Gaming platforms
     "Steam"              : "STEAM",
     "SteamGame"          : "STEAM",
-    "Blizzard"           : "BLIZZARD",
-    "EpicGames"          : "EPICGAMES",
-    "RiotGames"          : "RIOTGAMES",
-    "Xbox"               : "XBOX",
-    "PlayStation"        : "PLAYSTATION",
-    "Roblox"             : "ROBLOX",
-    "GeForceNow"         : "GEFORCENOW",
-    "PathOfExile"        : "PATHOFEXILE",
     # Cloud storage / bulky downloads
     "GoogleDrive"        : "GOOGLE_DRIVE",
     "GoogleDocs"         : "GOOGLE_DRIVE",
     "MS_OneDrive"        : "ONEDRIVE",
     "OneDrive"           : "ONEDRIVE",
+    # CDN / background OS updates
+    "AmazonAWS"          : "CDN_DOWNLOAD",
+    "Akamai"             : "CDN_DOWNLOAD",
+    "WindowsUpdate"      : "CDN_DOWNLOAD",
+    "AppleUpdate"        : "CDN_DOWNLOAD",
     # P2P
     "BitTorrent"         : "BITTORRENT",
     "Bittorrent"         : "BITTORRENT",
@@ -95,6 +81,13 @@ NFSTREAM_TO_PROTOCOL = {
     # Generic
     "TLS"                : "HTTPS",
     "SSL"                : "HTTPS",
+    "QUIC"               : "HTTPS",
+    # Local network noise → ignore
+    "MDNS"               : "UNKNOWN",
+    "mDNS"               : "UNKNOWN",
+    "NetBIOS"            : "UNKNOWN",
+    "NETBIOS"            : "UNKNOWN",
+    "NBNS"               : "UNKNOWN",
 }
 
 def normalize_protocol(proto):
@@ -162,11 +155,11 @@ def aggregate_flows(flows):
         up_bytes   = xfer.get('src2dst_bytes', 0)
         down_bytes = xfer.get('dst2src_bytes', 0)
 
-        if src_ip and src_ip.startswith('192.168.') and src_ip != '192.168.4.1':   # exclude router's own traffic i.e. gateway IP
+        if src_ip and src_ip.startswith('192.168.') and src_ip not in ('192.168.4.1', '192.168.4.255'):   # exclude gateway and local broadcast
             devices[src_ip]['up']               += up_bytes
             devices[src_ip]['protocols'][proto] += up_bytes
 
-        if dst_ip and dst_ip.startswith('192.168.') and dst_ip != '192.168.4.1':   # exclude router's own traffic i.e. gateway IP
+        if dst_ip and dst_ip.startswith('192.168.') and dst_ip not in ('192.168.4.1', '192.168.4.255'):   # exclude gateway and local broadcast
             devices[dst_ip]['down']               += down_bytes
             devices[dst_ip]['protocols'][proto]   += down_bytes
 
@@ -183,15 +176,11 @@ def monitor(interface='wlp3s0', interval=5):
             dst_ip = pkt[IP].dst
             size   = len(pkt)
 
-            if src_ip.startswith("192.168.") and src_ip != "192.168.4.1":   # exclude router's own traffic i.e. gateway IP
-                if src_ip not in tx_bytes:
-                    tx_bytes[src_ip] = 0
-                tx_bytes[src_ip] = tx_bytes[src_ip] + size
+            if src_ip.startswith("192.168.") and src_ip not in ("192.168.4.1", "192.168.4.255"):   # exclude gateway and local broadcast
+                tx_bytes[src_ip] = tx_bytes.get(src_ip, 0) + size
 
-            if dst_ip.startswith("192.168.") and dst_ip != "192.168.4.1":   # exclude router's own traffic i.e. gateway IP
-                if dst_ip not in rx_bytes:
-                    rx_bytes[dst_ip] = 0
-                rx_bytes[dst_ip] = rx_bytes[dst_ip] + size
+            if dst_ip.startswith("192.168.") and dst_ip not in ("192.168.4.1", "192.168.4.255"):   # exclude gateway and local broadcast
+                rx_bytes[dst_ip] = rx_bytes.get(dst_ip, 0) + size
 
     print(f"[{time.strftime('%H:%M:%S')}] Capturing packets for {interval} seconds...")
     sniff(iface=interface, prn=count_packet, timeout=interval, store=False)
@@ -221,7 +210,7 @@ def monitor(interface='wlp3s0', interval=5):
             raw_proto = 'UNKNOWN'
 
         normalized_proto = normalize_protocol(raw_proto)
-        priority         = get_priority(normalized_proto)
+        priority         = PROTOCOL_PRIORITY.get(normalized_proto, 1)
 
         device = {
             "ip"                       : ip,

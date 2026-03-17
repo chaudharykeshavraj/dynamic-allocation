@@ -14,9 +14,9 @@ app = Flask(__name__, template_folder=os.path.join(os.path.dirname(__file__), 't
 # Tolerance for enforcement  match check
 MATCH_TOLERANCE = 0.10
 
-@app.route('/')
-def dashboard():
 
+def build_devices():
+    """Convert raw live_state devices into dashboard-ready dicts."""
     devices = []
 
     for device in live_state['devices']:
@@ -48,24 +48,45 @@ def dashboard():
             'up_allocated'      : round(allocated_up_bps * 8) / 1_000_000,
             'enforced'          : round(enforced_total * 8) / 1_000_000,
             'enforced_down'     : round(enforced_down_bps * 8) / 1_000_000,
-            'enforced_up'       : round(enforced_up_bps * 8) / 1_000_000, 
+            'enforced_up'       : round(enforced_up_bps * 8) / 1_000_000,
             'is_match'          : is_match,
             'status'            : 'active' if demand_bps > 0 else 'idle',
         })
 
+    return devices
+
+
+def build_totals(devices):
+    """Compute summary totals from processed device list."""
     updated = live_state['updated']
-    totals = {
+    return {
         'devices'       : len(devices),
-        'demand'        : sum(d['demand'] for d in devices),
-        'allocated'     : sum(d['allocated'] for d in devices),
-        'enforced'      : sum(d['enforced'] for d in devices),
+        'demand'        : round(sum(d['demand'] for d in devices), 2),
+        'allocated'     : round(sum(d['allocated'] for d in devices), 2),
+        'enforced'      : round(sum(d['enforced'] for d in devices), 2),
         'down_pool'     : round(live_state['down_mbps'], 2),
         'up_pool'       : round(live_state['up_mbps'], 2),
         'time'          : updated.strftime('%Y-%m-%d %H:%M:%S') if updated else "-",
         'date'          : updated.strftime('%Y-%m-%d') if updated else "-",
     }
 
+
+@app.route('/')
+def dashboard():
+    devices = build_devices()
+    totals  = build_totals(devices)
     return render_template('dashboard.html', devices=devices, totals=totals)
+
+
+@app.route('/api/data')
+def api_data():
+    devices = build_devices()
+    totals  = build_totals(devices)
+    return jsonify({
+        'devices': devices,
+        'totals' : totals,
+    })
+
 
 @app.route('/api/status')
 def api_status():

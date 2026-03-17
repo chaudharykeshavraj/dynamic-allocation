@@ -1,6 +1,13 @@
-venv/
-.DS Store
+# Virtual environment
 .venv/
-.DS Store
-.vscode
-/__pycache__/
+venv/
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/

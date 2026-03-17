@@ -2,7 +2,7 @@
 <html>
 <head>
     <title>Bandwidth Allocation Dashboard</title>
-    <meta http-equiv="refresh" content="5">
+    <!-- AJAX polling replaces meta refresh — page stays alive, charts persist -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
     <style>
         body {
@@ -164,7 +164,7 @@
             margin-left: 8px;
         }
 
-        /* ── bar chart card ── */
+        /* ── chart cards ── */
         .chart-card {
             background: white;
             border-radius: 8px;
@@ -189,44 +189,41 @@
 
 <body>
     <div class="header">
-        <h2>📊 Bandwidth Allocation Dashboard</h2>
+        <h2>Bandwidth Allocation Dashboard</h2>
         <p>Real-time monitoring | Dynamic bandwidth allocation | Auto-refresh: 5 seconds</p>
     </div>
-
-    {% if devices %}
 
     <!-- ── Stats cards ── -->
     <div class="stats">
         <div class="stat">
-            <div class="stat-number">{{ totals.devices }}</div>
+            <div class="stat-number" id="stat-devices">{{ totals.devices }}</div>
             <div class="stat-label">Devices</div>
         </div>
         <div class="stat">
-            <div class="stat-number">{{ "%.2f"|format(totals.demand) }}</div>
+            <div class="stat-number" id="stat-demand">{{ "%.2f"|format(totals.demand) }}</div>
             <div class="stat-label">Demand (Mbps)</div>
         </div>
         <div class="stat">
-            <div class="stat-number">{{ "%.2f"|format(totals.allocated) }}</div>
+            <div class="stat-number" id="stat-allocated">{{ "%.2f"|format(totals.allocated) }}</div>
             <div class="stat-label">Allocated (Mbps)</div>
         </div>
         <div class="stat">
-            <div class="stat-number">{{ "%.2f"|format(totals.enforced) }}</div>
+            <div class="stat-number" id="stat-enforced">{{ "%.2f"|format(totals.enforced) }}</div>
             <div class="stat-label">Enforced (Mbps)</div>
         </div>
         <div class="stat">
-            <div class="stat-number">{{ "%.2f"|format(totals.down_pool) }}</div>
+            <div class="stat-number" id="stat-down-pool">{{ "%.2f"|format(totals.down_pool) }}</div>
             <div class="stat-label">Down Pool (Mbps)</div>
         </div>
         <div class="stat">
-            <div class="stat-number">{{ "%.2f"|format(totals.up_pool) }}</div>
+            <div class="stat-number" id="stat-up-pool">{{ "%.2f"|format(totals.up_pool) }}</div>
             <div class="stat-label">Up Pool (Mbps)</div>
         </div>
     </div>
 
-    <div class="update">
-        📅 <strong>{{ totals.date }}</strong> |
-        🕐 Last updated: <strong>{{ totals.time }}</strong> |
-        🔄 Auto-refresh every 5 seconds
+    <div class="update" id="update-bar">
+        Last updated: <strong id="update-time">{{ totals.time }}</strong> |
+        Auto-refresh every 5 seconds
     </div>
 
     <!-- ── Table ── -->
@@ -237,13 +234,12 @@
                 <th>Protocol</th>
                 <th>Priority</th>
                 <th>Demand (Mbps)</th>
-                <th>Allocated ↓ / ↑ (Mbps)</th>
-                <th>Enforced ↓ / ↑ (Mbps)</th>
-                <!--    <th>Match</th>  -->
+                <th>Allocated (Mbps)</th>
+                <th>Enforced (Mbps)</th>
                 <th>Status</th>
             </tr>
         </thead>
-        <tbody>
+        <tbody id="device-table-body">
             {% for device in devices %}
             <tr>
                 <td><span class="ip-address">{{ device.ip }}</span></td>
@@ -253,24 +249,15 @@
                 </td>
                 <td>{{ "%.2f"|format(device.demand) }}</td>
                 <td>
-                    <span class="bw-down">↓ {{ "%.2f"|format(device.down_allocated) }}</span>
+                    <span class="bw-down">{{ "%.2f"|format(device.down_allocated) }}</span>
                     &nbsp;/&nbsp;
-                    <span class="bw-up">↑ {{ "%.2f"|format(device.up_allocated) }}</span>
+                    <span class="bw-up">{{ "%.2f"|format(device.up_allocated) }}</span>
                 </td>
                 <td>
-                    <span class="bw-down">↓ {{ "%.2f"|format(device.enforced_down) }}</span>
+                    <span class="bw-down">{{ "%.2f"|format(device.enforced_down) }}</span>
                     &nbsp;/&nbsp;
-                    <span class="bw-up">↑ {{ "%.2f"|format(device.enforced_up) }}</span>
+                    <span class="bw-up">{{ "%.2f"|format(device.enforced_up) }}</span>
                 </td>
-                <!--
-                    <td>
-                        {% if device.is_match %}
-                        <span class="badge-match">✓ Match</span>
-                        {% else %}
-                        <span class="badge-mismatch">✗ Mismatch</span>
-                        {% endif %}
-                    </td>
-                -->
                 <td class="{{ device.status }}">
                     {% if device.status == "active" %}
                     <span class="status-active"></span>Active
@@ -283,43 +270,46 @@
         </tbody>
     </table>
 
-    <!-- ── Bar chart below table ── -->
+    <!-- ── Bar chart ── -->
     <div class="chart-card">
-        <h3>📊 Demand vs Allocated vs Enforced per Device</h3>
+        <h3>Demand vs Allocated vs Enforced per Device (Current)</h3>
         <div class="chart-canvas-wrap">
             <canvas id="barChart"></canvas>
         </div>
     </div>
 
-    <script>
-        const devices   = {{ devices | tojson }};
-        const labels    = devices.map(d => d.ip);
-        const demand    = devices.map(d => d.demand);
-        const allocated = devices.map(d => d.allocated);
-        const enforced  = devices.map(d => d.enforced);
+    <div style="text-align: center; margin-top: 20px; color: #95a5a6; font-size: 12px;">
+        Dynamic Bandwidth Allocation System | <span id="footer-date">{{ totals.date }}</span>
+    </div>
 
-        new Chart(document.getElementById('barChart'), {
+    <script>
+        // ── initial data from Jinja (first page load) ──
+        let currentDevices = {{ devices | tojson }};
+
+        // ── create bar chart ──
+        const barCtx = document.getElementById('barChart').getContext('2d');
+        const barChart = new Chart(barCtx, {
             type: 'bar',
             data: {
-                labels  : labels,
+                labels  : currentDevices.map(d => d.ip),
                 datasets: [
                     {
                         label          : 'Demand (Mbps)',
-                        data           : demand,
+                        data           : currentDevices.map(d => d.demand),
                         backgroundColor: '#e74c3c99',
                         borderColor    : '#e74c3c',
                         borderWidth    : 1,
                     },
                     {
                         label          : 'Allocated (Mbps)',
-                        data           : allocated,
+                        data           : currentDevices.map(d => d.allocated),
                         backgroundColor: '#3498db99',
                         borderColor    : '#3498db',
                         borderWidth    : 1,
                     },
                     {
                         label          : 'Enforced (Mbps)',
-                        data           : enforced,
+                        data           : currentDevices.map(d => d.enforced),
                         backgroundColor: '#2ecc7199',
                         borderColor    : '#2ecc71',
                         borderWidth    : 1,
@@ -342,20 +332,72 @@
                 }
             }
         });
+
+        // ── update functions ──
+        function updateStats(totals) {
+            document.getElementById('stat-devices').textContent    = totals.devices;
+            document.getElementById('stat-demand').textContent     = totals.demand.toFixed(2);
+            document.getElementById('stat-allocated').textContent  = totals.allocated.toFixed(2);
+            document.getElementById('stat-enforced').textContent   = totals.enforced.toFixed(2);
+            document.getElementById('stat-down-pool').textContent  = totals.down_pool.toFixed(2);
+            document.getElementById('stat-up-pool').textContent    = totals.up_pool.toFixed(2);
+            document.getElementById('update-time').textContent     = totals.time;
+            document.getElementById('footer-date').textContent     = totals.date;
+        }
+
+        function updateTable(devices) {
+            const tbody = document.getElementById('device-table-body');
+            let html = '';
+
+            for (const d of devices) {
+                const statusClass = d.status === 'active' ? 'active' : 'inactive';
+                const statusDot   = d.status === 'active'
+                    ? '<span class="status-active"></span>Active'
+                    : '<span class="status-inactive"></span>Idle';
+
+                html += `<tr>
+                    <td><span class="ip-address">${d.ip}</span></td>
+                    <td>${d.protocol}</td>
+                    <td><span class="priority priority-${d.priority}">${d.priority}</span></td>
+                    <td>${d.demand.toFixed(2)}</td>
+                    <td>
+                        <span class="bw-down">${d.down_allocated.toFixed(2)}</span>
+                        &nbsp;/&nbsp;
+                        <span class="bw-up">${d.up_allocated.toFixed(2)}</span>
+                    </td>
+                    <td>
+                        <span class="bw-down">${d.enforced_down.toFixed(2)}</span>
+                        &nbsp;/&nbsp;
+                        <span class="bw-up">${d.enforced_up.toFixed(2)}</span>
+                    </td>
+                    <td class="${statusClass}">${statusDot}</td>
+                </tr>`;
+            }
+
+            tbody.innerHTML = html;
+        }
+
+        function updateBarChart(devices) {
+            barChart.data.labels           = devices.map(d => d.ip);
+            barChart.data.datasets[0].data = devices.map(d => d.demand);
+            barChart.data.datasets[1].data = devices.map(d => d.allocated);
+            barChart.data.datasets[2].data = devices.map(d => d.enforced);
+            barChart.update();
+        }
+
+        // ── AJAX polling — fetch /api/data every 5 seconds ──
+        setInterval(async () => {
+            try {
+                const resp = await fetch('/api/data');
+                const data = await resp.json();
+                updateStats(data.totals);
+                updateTable(data.devices);
+                updateBarChart(data.devices);
+            } catch (err) {
+                console.error('Dashboard fetch error:', err);
+            }
+        }, 5000);
     </script>
 
-    {% else %}
-    <div class="no-data">
-        <h3>No devices detected</h3>
-        <p>Connect devices to your Wi-Fi network to see bandwidth allocation.</p>
-        <div class="warning">
-            <strong>Note:</strong> The system needs a few iterations to detect devices and calculate allocations.
-        </div>
-    </div>
-    {% endif %}
-
-    <div style="text-align: center; margin-top: 20px; color: #95a5a6; font-size: 12px;">
-        Dynamic Bandwidth Allocation System | {{ totals.date }}
-    </div>
 </body>
 </html>
