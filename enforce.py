@@ -5,6 +5,8 @@ import re
 known_devices  = {}     # ip → class_id
 is_setup_done  = False
 next_class_id  = 10     # global counter, never reuses ids
+last_interface = None
+last_device_allocations = {}  # ip -> latest allocated rates used for tc reapply
 
 # prev_counters stores last tc byte reading per class_id
 # so we can difference to readings to get bytes/sec
@@ -14,6 +16,9 @@ def run_cmd(cmd):
     subprocess.run(cmd, shell=True)
 
 def setup_tc(interface, download_bytes_per_sec, upload_bytes_per_sec):
+    global last_interface
+
+    last_interface = interface
 
     total_down_kbits = int((download_bytes_per_sec * 8) / 1000)
     total_up_kbits   = int((upload_bytes_per_sec   * 8) / 1000)
@@ -91,6 +96,89 @@ def remove_device(ip, class_id, interface):
     run_cmd(f"tc class del dev ifb0 classid 1:{class_id} 2>/dev/null")
 
     print(f"{ip} → removed from tc  [disconnected]")
+
+
+def reapply_all_devices():
+    """Recreate per-device tc classes/filters after a full tc reset."""
+    global prev_counters
+
+    if not last_interface:
+        print("No interface available for tc reapply")
+        return
+
+    if len(known_devices) == 0:
+        print("No devices to reapply")
+        return
+
+    # old byte counters are invalid after tc reset
+    prev_counters.clear()
+
+    reapplied = 0
+    for ip, class_id in known_devices.items():
+        device = last_device_allocations.get(ip)
+        if not device:
+            continue
+
+        add_device(device, class_id, last_interface)
+        reapplied += 1
+
+    print(f"Reapplied {reapplied} device classes after probe")
+
+
+def _to_bytes_per_sec(value, unit):
+    unit_factors = {
+        '': 1,
+        'k': 1_000,
+        'm': 1_000_000,
+        'g': 1_000_000_000,
+    }
+    bits_per_sec = float(value) * unit_factors.get(unit.lower(), 1)
+    return bits_per_sec / 8.0
+
+
+def _parse_class_rates(tc_output):
+    rates = {}
+    pattern = re.compile(
+        r'class\s+htb\s+1:(\d+).*?\brate\s+([0-9]+(?:\.[0-9]+)?)\s*([KMGkmg]?)bit',
+        re.IGNORECASE,
+    )
+
+    for line in tc_output.splitlines():
+        match = pattern.search(line)
+        if not match:
+            continue
+
+        class_id = int(match.group(1))
+        rate_value = match.group(2)
+        rate_unit = match.group(3)
+        rates[class_id] = _to_bytes_per_sec(rate_value, rate_unit)
+
+    return rates
+
+
+def read_enforced_rates(interface):
+    """Read configured tc class rates (what is enforced), not transient traffic throughput."""
+    down_raw = subprocess.run(
+        f"tc class show dev {interface}",
+        shell=True, capture_output=True, text=True
+    ).stdout
+
+    up_raw = subprocess.run(
+        "tc class show dev ifb0",
+        shell=True, capture_output=True, text=True
+    ).stdout
+
+    down_rates = _parse_class_rates(down_raw)
+    up_rates = _parse_class_rates(up_raw)
+
+    result = {}
+    for class_id in set(known_devices.values()):
+        result[class_id] = {
+            'down_bps': down_rates.get(class_id, 0.0),
+            'up_bps': up_rates.get(class_id, 0.0),
+        }
+
+    return result
 
 
 # read_stats() reads tc -s class show output and returns actual bytes/sec flowing per device based on kernel counters
@@ -183,7 +271,9 @@ def read_stats(interface):
     return result
 
 def enforce(all_devices, interface, download_bytes_per_sec, upload_bytes_per_sec):
-    global known_devices, is_setup_done, next_class_id
+    global known_devices, is_setup_done, next_class_id, last_interface
+
+    last_interface = interface
 
     # setup runs only once
     if not is_setup_done:
@@ -217,6 +307,9 @@ def enforce(all_devices, interface, download_bytes_per_sec, upload_bytes_per_sec
         remove_device(ip, class_id, interface)
         del known_devices[ip]
 
+        if ip in last_device_allocations:
+            del last_device_allocations[ip]
+
         # clean up prev_counters for disconnected/removed devices
         if class_id in prev_counters:
             del prev_counters[class_id]
@@ -225,6 +318,12 @@ def enforce(all_devices, interface, download_bytes_per_sec, upload_bytes_per_sec
     # add new or update existing devices
     for device in all_devices:
         ip = device['ip']
+
+        last_device_allocations[ip] = {
+            'ip': ip,
+            'allocated_bytes_download': device.get('allocated_bytes_download', 0),
+            'allocated_bytes_upload': device.get('allocated_bytes_upload', 0),
+        }
 
         if ip not in known_devices:
             # new device — assign next available class_id
@@ -235,9 +334,9 @@ def enforce(all_devices, interface, download_bytes_per_sec, upload_bytes_per_sec
             # existing device — use its permanent class_id
             update_device(device, known_devices[ip], interface)
 
-    # read rela tc byte counters and write enforced values
-    # this is needed for dashboard to compare enforcement vs allocation and check if they match within tolerance
-    tc_stats = read_stats(interface)
+    # read configured tc class rates and write enforced values
+    # this reflects what tc is enforcing, not momentary traffic throughput
+    tc_stats = read_enforced_rates(interface)
 
     for device in all_devices:
         ip          = device['ip']

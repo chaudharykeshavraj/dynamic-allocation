@@ -180,9 +180,15 @@
             text-transform: uppercase;
             letter-spacing: 1px;
         }
+        .charts-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 20px;
+            margin-top: 20px;
+        }
         .chart-canvas-wrap {
             position: relative;
-            height: 300px;
+            height: 280px;
         }
     </style>
 </head>
@@ -270,13 +276,12 @@
         </tbody>
     </table>
 
-    <!-- ── Bar chart ── -->
+    <!-- ── Per-device line charts ── -->
     <div class="chart-card">
-        <h3>Demand vs Allocated vs Enforced per Device (Current)</h3>
-        <div class="chart-canvas-wrap">
-            <canvas id="barChart"></canvas>
-        </div>
+        <h3>Per-Device Bandwidth Trend (Demand / Allocated / Enforced)</h3>
     </div>
+
+    <div id="device-chart-grid" class="charts-grid"></div>
 
     <div style="text-align: center; margin-top: 20px; color: #95a5a6; font-size: 12px;">
         Dynamic Bandwidth Allocation System | <span id="footer-date">{{ totals.date }}</span>
@@ -285,53 +290,101 @@
     <script>
         // ── initial data from Jinja (first page load) ──
         let currentDevices = {{ devices | tojson }};
+        let currentHistory = {{ history | tojson }};
 
-        // ── create bar chart ──
-        const barCtx = document.getElementById('barChart').getContext('2d');
-        const barChart = new Chart(barCtx, {
-            type: 'bar',
-            data: {
-                labels  : currentDevices.map(d => d.ip),
-                datasets: [
-                    {
-                        label          : 'Demand (Mbps)',
-                        data           : currentDevices.map(d => d.demand),
-                        backgroundColor: '#e74c3c99',
-                        borderColor    : '#e74c3c',
-                        borderWidth    : 1,
-                    },
-                    {
-                        label          : 'Allocated (Mbps)',
-                        data           : currentDevices.map(d => d.allocated),
-                        backgroundColor: '#3498db99',
-                        borderColor    : '#3498db',
-                        borderWidth    : 1,
-                    },
-                    {
-                        label          : 'Enforced (Mbps)',
-                        data           : currentDevices.map(d => d.enforced),
-                        backgroundColor: '#2ecc7199',
-                        borderColor    : '#2ecc71',
-                        borderWidth    : 1,
-                    },
-                ]
-            },
-            options: {
-                responsive         : true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { position: 'top', labels: { font: { size: 12 } } },
-                },
-                scales: {
-                    x: { ticks: { font: { size: 11 } } },
-                    y: {
-                        beginAtZero: true,
-                        title: { display: true, text: 'Mbps', font: { size: 12 } },
-                        ticks: { font: { size: 11 } },
-                    }
-                }
+        const SERIES_COLORS = {
+            demand   : '#e74c3c',
+            allocated: '#3498db',
+            enforced : '#2ecc71',
+        };
+
+        const deviceCharts = {};
+
+        function buildLineDataset(label, values, color) {
+            return {
+                label,
+                data: values,
+                borderColor: color,
+                backgroundColor: color + '33',
+                borderWidth: 2,
+                pointRadius: 2,
+                pointHoverRadius: 4,
+                tension: 0.15,
+                fill: false,
+            };
+        }
+
+        function destroyAllCharts() {
+            for (const key of Object.keys(deviceCharts)) {
+                deviceCharts[key].destroy();
+                delete deviceCharts[key];
             }
-        });
+        }
+
+        function renderDeviceCharts(history) {
+            const grid = document.getElementById('device-chart-grid');
+            const entries = Object.entries(history || {}).sort((a, b) => a[0].localeCompare(b[0]));
+
+            destroyAllCharts();
+            grid.innerHTML = '';
+
+            if (entries.length === 0) {
+                grid.innerHTML = `<div class="chart-card"><div class="no-data">No device history available yet.</div></div>`;
+                return;
+            }
+
+            for (const [ip, series] of entries) {
+                const safeIp = ip.replace(/[^a-zA-Z0-9]/g, '_');
+                const card = document.createElement('div');
+                card.className = 'chart-card';
+
+                const title = document.createElement('h3');
+                title.textContent = `${ip} - Demand vs Allocated vs Enforced`;
+                card.appendChild(title);
+
+                const wrap = document.createElement('div');
+                wrap.className = 'chart-canvas-wrap';
+
+                const canvas = document.createElement('canvas');
+                canvas.id = `deviceChart_${safeIp}`;
+                wrap.appendChild(canvas);
+                card.appendChild(wrap);
+                grid.appendChild(card);
+
+                const chart = new Chart(canvas.getContext('2d'), {
+                    type: 'line',
+                    data: {
+                        labels: series.time || [],
+                        datasets: [
+                            buildLineDataset('Demand (Mbps)', series.demand || [], SERIES_COLORS.demand),
+                            buildLineDataset('Allocated (Mbps)', series.allocated || [], SERIES_COLORS.allocated),
+                            buildLineDataset('Enforced (Mbps)', series.enforced || [], SERIES_COLORS.enforced),
+                        ],
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'index', intersect: false },
+                        plugins: {
+                            legend: { position: 'top', labels: { font: { size: 11 } } },
+                        },
+                        scales: {
+                            x: {
+                                title: { display: true, text: 'Time', font: { size: 11 } },
+                                ticks: { font: { size: 10 } },
+                            },
+                            y: {
+                                beginAtZero: true,
+                                title: { display: true, text: 'Mbps', font: { size: 11 } },
+                                ticks: { font: { size: 10 } },
+                            }
+                        }
+                    }
+                });
+
+                deviceCharts[ip] = chart;
+            }
+        }
 
         // ── update functions ──
         function updateStats(totals) {
@@ -377,13 +430,7 @@
             tbody.innerHTML = html;
         }
 
-        function updateBarChart(devices) {
-            barChart.data.labels           = devices.map(d => d.ip);
-            barChart.data.datasets[0].data = devices.map(d => d.demand);
-            barChart.data.datasets[1].data = devices.map(d => d.allocated);
-            barChart.data.datasets[2].data = devices.map(d => d.enforced);
-            barChart.update();
-        }
+        renderDeviceCharts(currentHistory);
 
         // ── AJAX polling — fetch /api/data every 5 seconds ──
         setInterval(async () => {
@@ -392,7 +439,7 @@
                 const data = await resp.json();
                 updateStats(data.totals);
                 updateTable(data.devices);
-                updateBarChart(data.devices);
+                renderDeviceCharts(data.history || {});
             } catch (err) {
                 console.error('Dashboard fetch error:', err);
             }

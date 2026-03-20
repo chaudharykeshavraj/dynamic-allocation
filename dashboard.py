@@ -9,10 +9,71 @@ live_state = {
     'updated'   : None,
 }
 
+history_state = {}
+MAX_HISTORY_POINTS = 120
+
 app = Flask(__name__, template_folder=os.path.join(os.path.dirname(__file__), 'templates'))
 
 # Tolerance for enforcement  match check
 MATCH_TOLERANCE = 0.10
+
+
+def _to_mbps(bytes_per_sec):
+    return round((bytes_per_sec * 8) / 1_000_000, 2)
+
+
+def update_history(devices, updated_at):
+    """Track per-device time series for demand/allocated/enforced bandwidth."""
+    if not devices:
+        history_state.clear()
+        return
+
+    active_ips = set()
+    time_label = updated_at.strftime('%H:%M:%S') if isinstance(updated_at, datetime) else str(updated_at)
+
+    for device in devices:
+        ip = device.get('ip', '')
+        if not ip:
+            continue
+
+        active_ips.add(ip)
+        series = history_state.setdefault(ip, {
+            'time': [],
+            'demand': [],
+            'allocated': [],
+            'enforced': [],
+        })
+
+        demand_bps = device.get('down_bytes_per_sec', 0) + device.get('up_bytes_per_sec', 0)
+        allocated_bps = device.get('allocated_bytes_download', 0) + device.get('allocated_bytes_upload', 0)
+        enforced_bps = device.get('enforced_down_bps', 0) + device.get('enforced_up_bps', 0)
+
+        series['time'].append(time_label)
+        series['demand'].append(_to_mbps(demand_bps))
+        series['allocated'].append(_to_mbps(allocated_bps))
+        series['enforced'].append(_to_mbps(enforced_bps))
+
+        if len(series['time']) > MAX_HISTORY_POINTS:
+            series['time'] = series['time'][-MAX_HISTORY_POINTS:]
+            series['demand'] = series['demand'][-MAX_HISTORY_POINTS:]
+            series['allocated'] = series['allocated'][-MAX_HISTORY_POINTS:]
+            series['enforced'] = series['enforced'][-MAX_HISTORY_POINTS:]
+
+    stale_ips = [ip for ip in history_state if ip not in active_ips]
+    for ip in stale_ips:
+        del history_state[ip]
+
+
+def build_history():
+    return {
+        ip: {
+            'time': list(series['time']),
+            'demand': list(series['demand']),
+            'allocated': list(series['allocated']),
+            'enforced': list(series['enforced']),
+        }
+        for ip, series in history_state.items()
+    }
 
 
 def build_devices():
@@ -75,16 +136,19 @@ def build_totals(devices):
 def dashboard():
     devices = build_devices()
     totals  = build_totals(devices)
-    return render_template('dashboard.html', devices=devices, totals=totals)
+    history = build_history()
+    return render_template('dashboard.html', devices=devices, totals=totals, history=history)
 
 
 @app.route('/api/data')
 def api_data():
     devices = build_devices()
     totals  = build_totals(devices)
+    history = build_history()
     return jsonify({
         'devices': devices,
         'totals' : totals,
+        'history': history,
     })
 
 
