@@ -2,19 +2,25 @@ import time
 import subprocess
 
 # -------------------------------
-# CONFIG (TUNED FOR YOUR LAPTOP)
+# CONFIG (TUNED FOR YOUR SYSTEM)
 # -------------------------------
-INITIAL_MBPS = 10        # your observed starting point
-MIN_MBPS     = 2         # never go below this
+INITIAL_MBPS = 10
+MIN_MBPS     = 2
+MAX_MBPS     = 20   # safety cap (your hardware limit)
+
 TC_HEADROOM  = 0.9
 INTERFACE    = "wlp3s0"
+
+# convert to bytes/sec
+MIN_BPS = (MIN_MBPS * 1_000_000) / 8
+MAX_BPS = (MAX_MBPS * 1_000_000) / 8
 
 _current_down_bps = None
 _current_up_bps   = None
 
 
 # -------------------------------
-# READ INTERFACE BYTES
+# READ INTERFACE
 # -------------------------------
 def _read_interface_bytes(interface):
     with open('/proc/net/dev') as f:
@@ -26,38 +32,34 @@ def _read_interface_bytes(interface):
 
 
 # -------------------------------
-# INITIAL CAPACITY (FIXED BASE)
+# INITIAL CAPACITY
 # -------------------------------
 def measure_total_bandwidth(interface=INTERFACE):
     global _current_down_bps, _current_up_bps
 
-    print("\n--- Initial Capacity Setup ---")
+    print("\n--- Initial Capacity ---")
 
-    # remove tc just in case
     subprocess.run(['tc', 'qdisc', 'del', 'dev', interface, 'root'],
                    capture_output=True)
 
-    # use REALISTIC fixed start
     base_bps = (INITIAL_MBPS * 1_000_000) / 8
 
     _current_down_bps = base_bps * TC_HEADROOM
     _current_up_bps   = _current_down_bps * 0.4
 
-    print(f"  Start Download = {INITIAL_MBPS} Mbps")
-    print(f"  Start Upload   ≈ {INITIAL_MBPS*0.4:.2f} Mbps")
+    print(f"  Start at {INITIAL_MBPS} Mbps")
 
     return _current_down_bps, _current_up_bps
 
 
 # -------------------------------
-# SAFE PROBE (NO COLLAPSE)
+# PROBE (SAFE + BOOST)
 # -------------------------------
 def probe_real_capacity(interface):
     global _current_down_bps, _current_up_bps
 
-    print("\n[PROBE] Checking real capacity...")
+    print("\n[PROBE] Measuring real capacity...")
 
-    # remove tc
     subprocess.run(['tc', 'qdisc', 'del', 'dev', interface, 'root'],
                    capture_output=True)
 
@@ -72,28 +74,32 @@ def probe_real_capacity(interface):
 
     print(f"  Observed = {real_mbps:.2f} Mbps")
 
-    # ignore very low values (idle case)
+    # ignore idle
     if real_mbps < 1:
-        print("  Ignored (too low, likely idle)")
+        print("  Ignored (idle)")
         return _current_down_bps, _current_up_bps
 
-    # smooth update (NO sharp drop)
-    new_down = 0.7 * _current_down_bps + 0.3 * (real_down * TC_HEADROOM)
+    # 🔥 KEY FIX: allow upward movement strongly
+    probe_down = real_down * TC_HEADROOM
 
-    # enforce minimum floor
-    min_bps = (MIN_MBPS * 1_000_000) / 8
-    new_down = max(new_down, min_bps)
+    if probe_down > _current_down_bps:
+        # fast increase
+        _current_down_bps = 0.6 * _current_down_bps + 0.4 * probe_down
+    else:
+        # slow decrease
+        _current_down_bps = 0.85 * _current_down_bps + 0.15 * probe_down
 
-    _current_down_bps = new_down
-    _current_up_bps   = new_down * 0.4
+    # clamp
+    _current_down_bps = max(MIN_BPS, min(MAX_BPS, _current_down_bps))
+    _current_up_bps   = _current_down_bps * 0.4
 
-    print(f"  Updated → {(new_down*8)/1_000_000:.2f} Mbps")
+    print(f"  Updated → {(_current_down_bps*8)/1_000_000:.2f} Mbps")
 
     return _current_down_bps, _current_up_bps
 
 
 # -------------------------------
-# CONTINUOUS UPDATE
+# CONTINUOUS UPDATE (KEY FIX)
 # -------------------------------
 def update_bandwidth_estimate(interface=INTERFACE):
     global _current_down_bps, _current_up_bps
@@ -107,22 +113,31 @@ def update_bandwidth_estimate(interface=INTERFACE):
 
     observed_down = rx2 - rx1
 
-    # upward adjustment only if clearly higher
-    if observed_down > _current_down_bps * 1.1:
-        _current_down_bps = (
-            0.8 * _current_down_bps +
-            0.2 * observed_down * TC_HEADROOM
-        )
-        print(f"[UPDATE] Increased → {(_current_down_bps*8)/1_000_000:.2f} Mbps")
+    # -------------------------------
+    # 🔥 KEY FIX 1: saturation detection
+    # -------------------------------
+    utilization = observed_down / (_current_down_bps + 1e-9)
 
-    # slow decay (prevents overestimation)
-    _current_down_bps *= 0.995
+    # if near capacity → increase
+    if utilization > 0.85:
+        boost = observed_down * TC_HEADROOM
+        _current_down_bps = 0.7 * _current_down_bps + 0.3 * boost
+        print(f"[UP] Saturation → increasing to {(_current_down_bps*8)/1_000_000:.2f} Mbps")
 
-    # enforce minimum floor
-    min_bps = (MIN_MBPS * 1_000_000) / 8
-    if _current_down_bps < min_bps:
-        _current_down_bps = min_bps
+    # -------------------------------
+    # 🔥 KEY FIX 2: moderate increase
+    # -------------------------------
+    elif observed_down > 0.6 * _current_down_bps:
+        _current_down_bps = 0.85 * _current_down_bps + 0.15 * (observed_down * TC_HEADROOM)
 
-    _current_up_bps = _current_down_bps * 0.4
+    # -------------------------------
+    # 🔥 KEY FIX 3: VERY slow decay
+    # -------------------------------
+    else:
+        _current_down_bps *= 0.999   # almost no decay
+
+    # clamp
+    _current_down_bps = max(MIN_BPS, min(MAX_BPS, _current_down_bps))
+    _current_up_bps   = _current_down_bps * 0.4
 
     return _current_down_bps, _current_up_bps
