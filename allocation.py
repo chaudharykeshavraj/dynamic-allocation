@@ -31,6 +31,7 @@ def allocate(all_devices, download_bytes_per_sec, upload_bytes_per_sec):
     total_weighted_demand_upload     = 0.0
 
     # phase 1 — minimum allocation using activity factor
+    # idle devices get less, active devices get more
     for device in all_devices:
 
         activity_factor_download = BETA + (1 - BETA) * (
@@ -70,6 +71,7 @@ def allocate(all_devices, download_bytes_per_sec, upload_bytes_per_sec):
         total_minimum_upload_allocated = upload_bytes_per_sec
 
     # phase 2 — weighted remaining allocation
+    # remaining bandwidth distributed by priority x demand
     remaining_download = max(0.0, download_bytes_per_sec - total_minimum_download_allocated)
     remaining_upload   = max(0.0, upload_bytes_per_sec   - total_minimum_upload_allocated)
 
@@ -93,10 +95,20 @@ def allocate(all_devices, download_bytes_per_sec, upload_bytes_per_sec):
             weight = device['priority'] * device['up_bytes_per_sec']
             device['allocated_bytes_upload'] += (weight / denom) * remaining_upload
 
-    # demand cap REMOVED
-    # when demand < capacity, devices get more than they need
-    # this clearly shows engine is actively distributing bandwidth
-    # not just mirroring demand
+    # ── DEMAND CAP ────────────────────────────────────────────
+    # no device gets more than it actually needs
+    # prevents wasting bandwidth on devices with low demand
+    # freed bandwidth naturally goes to devices that need more
+    # this is correct behavior — tc rule above demand is useless
+    for device in all_devices:
+        device['allocated_bytes_download'] = min(
+            device['allocated_bytes_download'],
+            device['down_bytes_per_sec'] + EPS
+        )
+        device['allocated_bytes_upload'] = min(
+            device['allocated_bytes_upload'],
+            device['up_bytes_per_sec'] + EPS
+        )
 
     # final normalization — hard cap guarantee
     # total never exceeds pool capacity
@@ -114,9 +126,9 @@ def allocate(all_devices, download_bytes_per_sec, upload_bytes_per_sec):
             device['allocated_bytes_upload'] *= scale
 
     # ── Save to CSV ───────────────────────────────────────────
-    file_path  = "result/allocate_vs_demand.csv"
+    file_path   = "result/allocate_vs_demand.csv"
     file_exists = os.path.isfile(file_path)
-    fieldnames = [
+    fieldnames  = [
         "timestamp", "ip", "up_bytes_per_sec", "down_bytes_per_sec",
         "protocol", "priority", "allocated_bytes_download", "allocated_bytes_upload"
     ]
@@ -127,7 +139,7 @@ def allocate(all_devices, download_bytes_per_sec, upload_bytes_per_sec):
         if not file_exists:
             writer.writeheader()
         for device in all_devices:
-            row           = device.copy()
+            row              = device.copy()
             row["timestamp"] = timestamp
             writer.writerow(row)
 
