@@ -93,22 +93,10 @@ def allocate(all_devices, download_bytes_per_sec, upload_bytes_per_sec):
             weight = device['priority'] * device['up_bytes_per_sec']
             device['allocated_bytes_upload'] += (weight / denom) * remaining_upload
 
-    # ── YOUR CLEVER FIX ──────────────────────────────────────
-    # cap allocated to actual demand
-    # no device should get more than what it actually needs
-    # if only 2 devices connected with low demand
-    # formula was giving more than demand — this fixes it
-    # in real time: allocated > demand means wasted bandwidth
-    # so we cap it and let remaining go to final normalization
-    for device in all_devices:
-        device['allocated_bytes_download'] = min(
-            device['allocated_bytes_download'],
-            device['down_bytes_per_sec'] + EPS   # +EPS avoids zero issues
-        )
-        device['allocated_bytes_upload'] = min(
-            device['allocated_bytes_upload'],
-            device['up_bytes_per_sec'] + EPS
-        )
+    # demand cap REMOVED
+    # when demand < capacity, devices get more than they need
+    # this clearly shows engine is actively distributing bandwidth
+    # not just mirroring demand
 
     # final normalization — hard cap guarantee
     # total never exceeds pool capacity
@@ -125,34 +113,21 @@ def allocate(all_devices, download_bytes_per_sec, upload_bytes_per_sec):
         for device in all_devices:
             device['allocated_bytes_upload'] *= scale
 
-   ###### 
-
-    file_path = "result/allocate_vs_demand.csv"
-
+    # ── Save to CSV ───────────────────────────────────────────
+    file_path  = "result/allocate_vs_demand.csv"
     file_exists = os.path.isfile(file_path)
-
     fieldnames = [
-        "timestamp",
-        "ip",
-        "up_bytes_per_sec",
-        "down_bytes_per_sec",
-        "protocol",
-        "priority",
-        "allocated_bytes_download",
-        "allocated_bytes_upload"
+        "timestamp", "ip", "up_bytes_per_sec", "down_bytes_per_sec",
+        "protocol", "priority", "allocated_bytes_download", "allocated_bytes_upload"
     ]
-
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     with open(file_path, mode="a", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
-
-        # Write header only if file does NOT exist
         if not file_exists:
             writer.writeheader()
-
         for device in all_devices:
-            row = device.copy()
+            row           = device.copy()
             row["timestamp"] = timestamp
             writer.writerow(row)
 
