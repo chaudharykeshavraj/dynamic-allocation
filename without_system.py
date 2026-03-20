@@ -1,13 +1,26 @@
-from scapy.all import sniff, IP
+#!/usr/bin/env python3
+"""
+without_system.py - Run monitor in a continuous loop
+Captures network traffic every INTERVAL seconds and saves to CSV
+No bandwidth allocation or tc rules - pure monitoring
+"""
+
+import time
+import signal
+import sys
+import os
+import csv
 import subprocess
 import json
 import tempfile
-import os
-import time
 import threading
-import csv
 from collections import defaultdict
 from datetime import datetime
+from scapy.all import sniff, IP
+
+# ── Config ────────────────────────────────────────────────────
+INTERFACE = 'wlp3s0'
+INTERVAL = 5  # seconds
 
 # ── Priority Table ────────────────────────────────────────────
 PROTOCOL_PRIORITY = {
@@ -60,7 +73,7 @@ PORT_TO_PROTOCOL = {
 _protocol_cache = {}
 _cache_timeout_secs = 30
 
-# CSV file path - will be created in current directory
+# CSV file path
 WITHOUT_SYSTEM_CSV = "without_system.csv"
 
 
@@ -185,8 +198,16 @@ def resolve_best_protocol(ip, ndpi_proto, ndpi_devices, now):
     return normalized
 
 
+def get_kernel_bytes(interface):
+    with open('/proc/net/dev') as f:
+        for line in f:
+            if interface in line:
+                parts = line.split()
+                return int(parts[1]), int(parts[9])
+    return 0, 0
+
+
 def create_csv_if_not_exists():
-    """Create CSV file with header if it doesn't exist"""
     if not os.path.exists(WITHOUT_SYSTEM_CSV):
         print(f"  Creating new CSV file: {WITHOUT_SYSTEM_CSV}")
         with open(WITHOUT_SYSTEM_CSV, mode='w', newline='') as file:
@@ -200,16 +221,12 @@ def create_csv_if_not_exists():
 
 
 def append_to_csv(devices, total_down_bps, total_up_bps, timestamp):
-    """Append device data to CSV file"""
-    # Ensure file exists with header
     create_csv_if_not_exists()
     
-    # Append data
     with open(WITHOUT_SYSTEM_CSV, mode="a", newline="") as file:
         writer = csv.writer(file)
-        
         for device in devices:
-            row = [
+            writer.writerow([
                 timestamp,
                 device['ip'],
                 device['up_bytes_per_sec'],
@@ -218,8 +235,7 @@ def append_to_csv(devices, total_down_bps, total_up_bps, timestamp):
                 device['priority'],
                 total_down_bps,
                 total_up_bps,
-            ]
-            writer.writerow(row)
+            ])
     
     print(f"  Appended {len(devices)} devices to {WITHOUT_SYSTEM_CSV}")
 
@@ -227,24 +243,13 @@ def append_to_csv(devices, total_down_bps, total_up_bps, timestamp):
 def monitor(interface='wlp3s0', interval=5):
     """
     DIRECT MIRROR: Reports EXACT throughput measured by Linux kernel.
-    No calculations, no tc boost, no demand estimation.
-    Pure pass-through of what actually passed through the interface.
+    Captures for exactly 'interval' seconds.
     """
     
-    # Direct byte counters from kernel - most accurate
-    def get_kernel_bytes():
-        with open('/proc/net/dev') as f:
-            for line in f:
-                if interface in line:
-                    parts = line.split()
-                    # rx_bytes = parts[1] (received), tx_bytes = parts[9] (transmitted)
-                    return int(parts[1]), int(parts[9])
-        return 0, 0
-
     # Snapshot before monitoring
-    rx_start, tx_start = get_kernel_bytes()
+    rx_start, tx_start = get_kernel_bytes(interface)
     
-    # Container for per-IP breakdown from packet inspection
+    # Container for per-IP breakdown
     tx_bytes = defaultdict(int)
     rx_bytes = defaultdict(int)
     flows_result = [None]
@@ -263,18 +268,17 @@ def monitor(interface='wlp3s0', interval=5):
     def run_ndpi():
         flows_result[0] = get_flows(interface, interval)
 
-    # Run both capture methods simultaneously
-    print(f"[{time.strftime('%H:%M:%S')}] Capturing for {interval} seconds...")
-    
+    print(f"[{time.strftime('%H:%M:%S')}] Capturing packets + nDPI for {interval} seconds...")
+
     ndpi_thread = threading.Thread(target=run_ndpi)
     ndpi_thread.start()
     sniff(iface=interface, prn=count_packet, timeout=interval, store=False)
     ndpi_thread.join(timeout=interval + 3)
 
     # Snapshot after monitoring
-    rx_end, tx_end = get_kernel_bytes()
+    rx_end, tx_end = get_kernel_bytes(interface)
     
-    # Calculate TOTAL throughput from kernel (ground truth)
+    # Calculate total throughput
     total_rx_bytes = rx_end - rx_start
     total_tx_bytes = tx_end - tx_start
     total_down_bps = total_rx_bytes / interval
@@ -283,7 +287,6 @@ def monitor(interface='wlp3s0', interval=5):
     flows = flows_result[0] or []
     ndpi_data = aggregate_flows(flows)
 
-    # Get all IPs from packet inspection
     all_ips = set(tx_bytes.keys()) | set(rx_bytes.keys()) | set(ndpi_data.keys())
     
     if not all_ips:
@@ -293,16 +296,14 @@ def monitor(interface='wlp3s0', interval=5):
     now = time.time()
     all_devices = []
 
-    # Calculate per-IP throughput from packet inspection
     total_packet_down = sum(rx_bytes.values())
     total_packet_up = sum(tx_bytes.values())
 
     for ip in sorted(all_ips):
-        # Raw packet bytes from scapy
         up_packets = tx_bytes.get(ip, 0)
         down_packets = rx_bytes.get(ip, 0)
         
-        # Scale to match kernel totals (compensate for packet loss in capture)
+        # Scale to match kernel totals
         if total_packet_down > 0:
             down_scaled = (down_packets / total_packet_down) * total_rx_bytes
         else:
@@ -313,11 +314,10 @@ def monitor(interface='wlp3s0', interval=5):
         else:
             up_scaled = up_packets
 
-        # Final throughput in bytes/sec
         down_bytes_per_sec = down_scaled / interval
         up_bytes_per_sec = up_scaled / interval
 
-        # Protocol detection from nDPI
+        # Protocol detection
         if ip in ndpi_data and ndpi_data[ip]['protocols']:
             raw_proto = max(ndpi_data[ip]['protocols'].items(), key=lambda x: x[1])[0]
         else:
@@ -335,7 +335,7 @@ def monitor(interface='wlp3s0', interval=5):
         }
         all_devices.append(device)
 
-    # Print summary with kernel ground truth
+    # Print summary
     print(f"\n{'='*80}")
     print(f"KERNEL GROUND TRUTH - Total: Down={total_down_bps/1024:.1f} KB/s ({total_down_bps*8/1e6:.2f} Mbps), Up={total_up_bps/1024:.1f} KB/s ({total_up_bps*8/1e6:.2f} Mbps)")
     print(f"{'='*80}")
@@ -357,18 +357,55 @@ def monitor(interface='wlp3s0', interval=5):
     return all_devices
 
 
-# For standalone testing
+# ── Signal Handler ────────────────────────────────────────────
+def signal_handler(sig, frame):
+    print("\n\n" + "="*50)
+    print("Stopping without_system monitoring...")
+    print(f"Data saved to: {WITHOUT_SYSTEM_CSV}")
+    print("="*50)
+    sys.exit(0)
+
+
+# ── Main Loop ─────────────────────────────────────────────────
+def main():
+    signal.signal(signal.SIGINT, signal_handler)
+    
+    print("\n" + "="*60)
+    print(" WITHOUT SYSTEM MONITOR - Continuous Traffic Capture")
+    print("="*60)
+    print(f"Interface: {INTERFACE}")
+    print(f"Interval: {INTERVAL} seconds")
+    print(f"Output: {WITHOUT_SYSTEM_CSV}")
+    print("\nPress Ctrl+C to stop\n")
+    print("="*60 + "\n")
+    
+    interval_count = 0
+    
+    while True:
+        interval_count += 1
+        
+        print(f"\n{'─'*60}")
+        print(f"Interval {interval_count} - {datetime.now().strftime('%H:%M:%S')}")
+        print(f"{'─'*60}")
+        
+        try:
+            # Run one monitoring cycle
+            devices = monitor(INTERFACE, INTERVAL)
+            
+            if len(devices) == 0:
+                print("No devices detected this interval")
+            else:
+                print(f"\n✓ Interval {interval_count} complete - {len(devices)} devices captured")
+                
+        except Exception as e:
+            print(f"✗ Error during monitoring: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        # Wait before next interval
+        print(f"\nWaiting {INTERVAL} seconds for next capture...")
+        time.sleep(INTERVAL)
+
+
 if __name__ == "__main__":
-    import sys
-    interface = sys.argv[1] if len(sys.argv) > 1 else "wlp3s0"
-    interval = int(sys.argv[2]) if len(sys.argv) > 2 else 5
-    
-    print(f"\n=== WITHOUT SYSTEM MONITOR ===")
-    print(f"Interface: {interface}")
-    print(f"Interval: {interval} seconds")
-    print(f"CSV File: {WITHOUT_SYSTEM_CSV}\n")
-    
-    # Run once
-    devices = monitor(interface, interval)
-    
-    print(f"\nDone! Check {WITHOUT_SYSTEM_CSV} for data")
+    main()
