@@ -1,8 +1,0 @@
-down_bytes_per_sec,up_bytes_per_sec,priority,protocol
-44.0,0.0,1,NETBIOS
-88.0,0.0,1,NETBIOS
-36.8,0.0,1,NETBIOS
-36.8,0.0,1,NETBIOS
-44.0,0.0,1,NETBIOS
-44.0,0.0,1,NETBIOS
-73.6,0.0,1,NETBIOS
