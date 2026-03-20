@@ -4,7 +4,7 @@ import re
 
 known_devices           = {}
 is_setup_done           = False
-next_class_id           = 10    # starts at 10 — avoids conflict with 1:1 and 1:999
+next_class_id           = 10
 last_interface          = None
 last_device_allocations = {}
 _prev_tc                = {}
@@ -18,39 +18,34 @@ def _run(cmd):
                           capture_output=True, text=True).stdout
 
 
-def _parse_tc_bytes(tc_output):
-    """
-    Parse tc -s class show output.
-    Returns dict: class_id (int) → cumulative bytes sent.
+def _tc_rules_exist(interface):
+    """Check if HTB qdisc exists on interface."""
+    result = subprocess.run(
+        ['tc', 'qdisc', 'show', 'dev', interface],
+        capture_output=True, text=True
+    )
+    return 'htb' in result.stdout
 
-    IMPORTANT: skips class 1:1 (master parent — sum of ALL devices)
-               skips class 1:999 (default unmatched class)
-               these are NOT device classes — reading them causes inflation
-    """
+
+def _parse_tc_bytes(tc_output):
     counters   = {}
     current_id = None
-
-    # these are infrastructure classes not device classes
-    # reading 1:1 would give sum of all traffic = massive inflation
     SKIP_IDS = {1, 999}
 
     for line in tc_output.splitlines():
-        # match HTB class header only
         m = re.search(r'class htb 1:(\d+)', line)
         if m:
             cid = int(m.group(1))
             if cid in SKIP_IDS:
-                current_id = None   # skip — not a device class
+                current_id = None
                 continue
             current_id = cid
             continue
 
-        # fq_codel class lines — ignore completely
         if 'class fq_codel' in line:
             current_id = None
             continue
 
-        # read Sent bytes from line following HTB device class header
         if current_id is not None:
             m = re.search(r'Sent (\d+) bytes', line)
             if m:
@@ -61,18 +56,12 @@ def _parse_tc_bytes(tc_output):
 
 
 def _read_tc_bytes_now(interface):
-    """Read current cumulative Sent bytes for download and upload."""
     down_raw = _run(f"tc -s class show dev {interface}")
     up_raw   = _run("tc -s class show dev ifb0")
     return _parse_tc_bytes(down_raw), _parse_tc_bytes(up_raw)
 
 
 def _snapshot_tc_counters(interface):
-    """
-    Save current tc byte counters into _prev_tc.
-    Called at END of each enforce() cycle.
-    Next cycle diffs against these values.
-    """
     down_counters, up_counters = _read_tc_bytes_now(interface)
     now = time.time()
 
@@ -85,11 +74,6 @@ def _snapshot_tc_counters(interface):
 
 
 def read_stats_tc(interface):
-    """
-    Compute per-device actual throughput by diffing tc Sent counters.
-    Returns dict: ip → { down_bps, up_bps }
-    Returns 0 for first cycle (no prev snapshot yet) — this is correct.
-    """
     down_current, up_current = _read_tc_bytes_now(interface)
     now    = time.time()
     result = {}
@@ -102,13 +86,12 @@ def read_stats_tc(interface):
             prev    = _prev_tc[class_id]
             elapsed = now - prev['time']
 
-            if elapsed > 0.1:   # guard against near-zero elapsed
+            if elapsed > 0.1:
                 down_bps = max(0, (d_now - prev['down_bytes']) / elapsed)
                 up_bps   = max(0, (u_now - prev['up_bytes'])   / elapsed)
             else:
                 down_bps = up_bps = 0.0
         else:
-            # first cycle for this device — no prev snapshot
             down_bps = up_bps = 0.0
 
         result[ip] = {'down_bps': down_bps, 'up_bps': up_bps}
@@ -150,14 +133,12 @@ def setup_tc(interface, download_bytes_per_sec, upload_bytes_per_sec):
 
 
 def add_device(device, class_id, interface):
-
     ip         = device['ip']
     down_kbits = max(1, int((device['allocated_bytes_download'] * 8) / 1000))
     up_kbits   = max(1, int((device['allocated_bytes_upload']   * 8) / 1000))
     down_burst = max(15, down_kbits // 8)
     up_burst   = max(15, up_kbits   // 8)
 
-    # download — wlp3s0 egress
     run_cmd(f"tc class add dev {interface} parent 1:1 classid 1:{class_id} "
             f"htb rate {down_kbits}kbit ceil {down_kbits}kbit burst {down_burst}kb")
     run_cmd(f"tc qdisc add dev {interface} parent 1:{class_id} handle {class_id}0: "
@@ -165,7 +146,6 @@ def add_device(device, class_id, interface):
     run_cmd(f"tc filter add dev {interface} protocol ip parent 1:0 prio 1 "
             f"u32 match ip dst {ip}/32 flowid 1:{class_id}")
 
-    # upload — ifb0 egress
     run_cmd(f"tc class add dev ifb0 parent 1:1 classid 1:{class_id} "
             f"htb rate {up_kbits}kbit ceil {up_kbits}kbit burst {up_burst}kb")
     run_cmd(f"tc qdisc add dev ifb0 parent 1:{class_id} handle {class_id}0: "
@@ -177,7 +157,6 @@ def add_device(device, class_id, interface):
 
 
 def update_device(device, class_id, interface):
-
     down_kbits = max(1, int((device['allocated_bytes_download'] * 8) / 1000))
     up_kbits   = max(1, int((device['allocated_bytes_upload']   * 8) / 1000))
     down_burst = max(15, down_kbits // 8)
@@ -192,7 +171,6 @@ def update_device(device, class_id, interface):
 
 
 def remove_device(ip, class_id, interface):
-
     run_cmd(f"tc qdisc del dev {interface} handle {class_id}0: 2>/dev/null")
     run_cmd(f"tc qdisc del dev ifb0 handle {class_id}0: 2>/dev/null")
     run_cmd(f"tc filter del dev {interface} protocol ip parent 1:0 prio 1 "
@@ -207,18 +185,11 @@ def remove_device(ip, class_id, interface):
 
 
 def reapply_all_devices():
-    """
-    Recreate per-device tc classes after full tc reset (post-probe).
-    Clears _prev_tc so next diff starts fresh — avoids
-    (new_small - old_large) = negative → clamped to 0 problem.
-    """
     global _prev_tc
 
     if not last_interface:
         return
 
-    # tc counters reset to zero on flush
-    # clear stale snapshots so next cycle starts fresh
     _prev_tc.clear()
 
     reapplied = 0
@@ -236,9 +207,22 @@ def enforce(all_devices, interface, download_bytes_per_sec, upload_bytes_per_sec
 
     last_interface = interface
 
-    if not is_setup_done:
+    # Check if tc rules actually exist
+    rules_exist = _tc_rules_exist(interface)
+
+    if not is_setup_done or not rules_exist:
+        print("  [ENFORCE] Setting up tc rules...")
         setup_tc(interface, download_bytes_per_sec, upload_bytes_per_sec)
         is_setup_done = True
+        
+        # Reapply all existing devices after fresh setup
+        for ip, class_id in known_devices.items():
+            device = last_device_allocations.get(ip)
+            if device:
+                add_device(device, class_id, interface)
+        
+        # Snapshot counters immediately after setup
+        _snapshot_tc_counters(interface)
 
     # update parent class ceiling every cycle
     total_down_kbits = int((download_bytes_per_sec * 8) / 1000)
@@ -252,7 +236,6 @@ def enforce(all_devices, interface, download_bytes_per_sec, upload_bytes_per_sec
             f"htb rate {total_up_kbits}kbit burst {up_burst}kb")
 
     # read actual enforced throughput from tc counters
-    # skips class 1:1 and 1:999 — not device classes
     actual_stats = read_stats_tc(interface)
 
     # remove disconnected devices
@@ -293,5 +276,4 @@ def enforce(all_devices, interface, download_bytes_per_sec, upload_bytes_per_sec
             device['enforced_up_bps']   = 0.0
 
     # snapshot tc counters at END of cycle
-    # next cycle diffs against these values
     _snapshot_tc_counters(interface)
