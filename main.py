@@ -7,10 +7,14 @@ from datetime import datetime
 
 from collection        import collect
 from monitor           import monitor
-from allocation        import allocate        # ← allocation.py
-from enforce           import enforce, setup_tc
-from measure_bandwidth import measure_total_bandwidth
-from initiallize       import initiallize     # ← initiallize.py
+from allocation        import allocate
+from enforce           import enforce, setup_tc, reapply_all_devices
+from measure_bandwidth import (
+    measure_total_bandwidth,
+    update_bandwidth_estimate,
+    probe_real_capacity
+)
+from initiallize       import initiallize
 from dashboard         import app, live_state
 
 def signal_handler(sig, frame):
@@ -19,8 +23,9 @@ def signal_handler(sig, frame):
 
 signal.signal(signal.SIGINT, signal_handler)
 
-INTERFACE = 'wlp3s0'
-INTERVAL  = 5
+INTERFACE     = 'wlp3s0'
+INTERVAL      = 5
+PROBE_EVERY_N = 12   # probe every 12 × 5sec = 60 seconds
 
 # ── Dashboard ─────────────────────────────────────────────────
 def start_dashboard():
@@ -29,67 +34,91 @@ def start_dashboard():
     print("="*50 + "\n")
     app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
 
-start_dashboard_thread = threading.Thread(target=start_dashboard, daemon=True)
-start_dashboard_thread.start()
+dashboard_thread = threading.Thread(target=start_dashboard, daemon=True)
+dashboard_thread.start()
 time.sleep(1.5)
 webbrowser.open("http://localhost:5000")
 
-# ── Measure Bandwidth ─────────────────────────────────────────
-print("Measuring network bandwidth...")
-DOWN_BPS, UP_BPS = measure_total_bandwidth()
-print(f"Download pool = {(DOWN_BPS * 8) / 1_000_000:.2f} Mbps")
-print(f"Upload pool   = {(UP_BPS   * 8) / 1_000_000:.2f} Mbps")
+# ── Step 1: Measure BEFORE tc setup ───────────────────────────
+# critical — must run before setup_tc()
+# no tc rules active → real WiFi capacity visible
+print("Measuring WiFi capacity...")
+DOWN_BPS, UP_BPS = measure_total_bandwidth(INTERFACE)
 
 live_state['down_mbps'] = (DOWN_BPS * 8) / 1_000_000
 live_state['up_mbps']   = (UP_BPS   * 8) / 1_000_000
 
-# ── Setup TC Once ─────────────────────────────────────────────
+# ── Step 2: Setup tc AFTER measurement ────────────────────────
 setup_tc(INTERFACE, DOWN_BPS, UP_BPS)
 
-# ── ML Initiallization — Runs Once Before Main Loop ──────────
-# initiallize() does:
-#   1. ARP scan → find connected devices
-#   2. devices WITH model → predict.py predicts class → seed demand
-#   3. devices WITHOUT model → default seed demand
-#   4. returns device list for allocation and enforce
-print("\nInitiallizing devices...")
+# ── Step 3: ML Initialization ─────────────────────────────────
+print("\nInitializing devices...")
 initial_devices = initiallize(INTERFACE, DOWN_BPS, UP_BPS)
 
 if len(initial_devices) > 0:
-    # allocation.py distributes total bandwidth
-    # based on ML seed demand and nDPI priority
     initial_allocated = allocate(initial_devices, DOWN_BPS, UP_BPS)
-
-    # enforce sets tc rules before monitor starts
-    # devices get correct bandwidth from second 0
     enforce(initial_allocated, INTERFACE, DOWN_BPS, UP_BPS)
     print(f"tc rules applied for {len(initial_devices)} devices!")
 else:
-    print("No initiallization, waiting for first monitor interval...")
+    print("No initialization, waiting for first monitor interval...")
 
-# ── Main Loop — Normal Reactive From Here ─────────────────────
+# ── Main Loop ──────────────────────────────────────────────────
+interval_count = 0
+
 while True:
 
+    print(f"\n{'='*55}")
+    print(f"Interval {interval_count + 1}")
+    print(f"{'='*55}")
+
+    # ── Probe every 60 seconds ────────────────────────────────
+    # removes tc briefly, observes real capacity, restores tc
+    # corrects capacity estimate that tc ceiling would otherwise trap
+    if interval_count > 0 and interval_count % PROBE_EVERY_N == 0:
+        DOWN_BPS, UP_BPS = probe_real_capacity(
+            interface           = INTERFACE,
+            setup_tc_func       = setup_tc,
+            reapply_devices_func= reapply_all_devices
+        )
+        live_state['down_mbps'] = (DOWN_BPS * 8) / 1_000_000
+        live_state['up_mbps']   = (UP_BPS   * 8) / 1_000_000
+
+    # ── Monitor ───────────────────────────────────────────────
     print("\nStep 1: Monitoring")
     all_devices = monitor(INTERFACE, INTERVAL)
 
     if len(all_devices) == 0:
         print("No devices found, retrying...")
+        interval_count += 1
         continue
 
     print(f"Found {len(all_devices)} device(s)")
 
+    # ── Fine-tune capacity every interval ─────────────────────
+    # reads /proc/net/dev — zero network cost
+    # only adjusts upward — prevents tc ceiling trapping estimate
+    DOWN_BPS, UP_BPS = update_bandwidth_estimate(INTERFACE)
+    print(f"Capacity → down={( DOWN_BPS*8)/1_000_000:.2f} Mbps  up={(UP_BPS*8)/1_000_000:.2f} Mbps")
+
+    live_state['down_mbps'] = (DOWN_BPS * 8) / 1_000_000
+    live_state['up_mbps']   = (UP_BPS   * 8) / 1_000_000
+
+    # ── Allocate ──────────────────────────────────────────────
     print("\nStep 2: Allocating")
     all_devices = allocate(all_devices, DOWN_BPS, UP_BPS)
 
+    # ── Enforce ───────────────────────────────────────────────
     print("\nStep 3: Enforcing")
     enforce(all_devices, INTERFACE, DOWN_BPS, UP_BPS)
 
+    # ── Collect ───────────────────────────────────────────────
     print("\nStep 4: Saving data")
     collect(all_devices)
 
+    # ── Dashboard ─────────────────────────────────────────────
     print("\nStep 5: Updating dashboard")
     live_state['devices'] = all_devices
     live_state['updated'] = datetime.now()
 
-    print("\nCycle complete, starting next")
+    print("\nCycle complete")
+    interval_count += 1
