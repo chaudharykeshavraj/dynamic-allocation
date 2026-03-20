@@ -1,3 +1,8 @@
+from datetime import datetime
+import csv
+import os
+
+
 def allocate(all_devices, download_bytes_per_sec, upload_bytes_per_sec):
     ALPHA = 0.2
     BETA  = 0.1
@@ -119,5 +124,36 @@ def allocate(all_devices, download_bytes_per_sec, upload_bytes_per_sec):
         scale = upload_bytes_per_sec / (total_up + EPS)
         for device in all_devices:
             device['allocated_bytes_upload'] *= scale
+
+   ###### 
+
+    file_path = "result/allocate_vs_demand.csv"
+
+    file_exists = os.path.isfile(file_path)
+
+    fieldnames = [
+        "timestamp",
+        "ip",
+        "up_bytes_per_sec",
+        "down_bytes_per_sec",
+        "protocol",
+        "priority",
+        "allocated_bytes_download",
+        "allocated_bytes_upload"
+    ]
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    with open(file_path, mode="a", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+
+        # Write header only if file does NOT exist
+        if not file_exists:
+            writer.writeheader()
+
+        for device in all_devices:
+            row = device.copy()
+            row["timestamp"] = timestamp
+            writer.writerow(row)
 
     return all_devices
