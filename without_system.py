@@ -60,7 +60,7 @@ PORT_TO_PROTOCOL = {
 _protocol_cache = {}
 _cache_timeout_secs = 30
 
-# CSV file path
+# CSV file path - will be created in current directory
 WITHOUT_SYSTEM_CSV = "without_system.csv"
 
 
@@ -185,34 +185,43 @@ def resolve_best_protocol(ip, ndpi_proto, ndpi_devices, now):
     return normalized
 
 
-def save_without_system(devices, total_down_bps, total_up_bps, timestamp):
-    """Save demand data to without_system.csv with same structure as allocate_vs_demand.csv"""
+def create_csv_if_not_exists():
+    """Create CSV file with header if it doesn't exist"""
+    if not os.path.exists(WITHOUT_SYSTEM_CSV):
+        print(f"  Creating new CSV file: {WITHOUT_SYSTEM_CSV}")
+        with open(WITHOUT_SYSTEM_CSV, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow([
+                "timestamp", "ip", "up_bytes_per_sec", "down_bytes_per_sec",
+                "protocol", "priority", "total_down_bps", "total_up_bps"
+            ])
+        return True
+    return False
+
+
+def append_to_csv(devices, total_down_bps, total_up_bps, timestamp):
+    """Append device data to CSV file"""
+    # Ensure file exists with header
+    create_csv_if_not_exists()
     
-    file_exists = os.path.isfile(WITHOUT_SYSTEM_CSV)
-    fieldnames = [
-        "timestamp", "ip", "up_bytes_per_sec", "down_bytes_per_sec",
-        "protocol", "priority", "total_down_bps", "total_up_bps"
-    ]
-    
+    # Append data
     with open(WITHOUT_SYSTEM_CSV, mode="a", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=fieldnames)
-        if not file_exists:
-            writer.writeheader()
+        writer = csv.writer(file)
         
         for device in devices:
-            row = {
-                "timestamp": timestamp,
-                "ip": device['ip'],
-                "up_bytes_per_sec": device['up_bytes_per_sec'],
-                "down_bytes_per_sec": device['down_bytes_per_sec'],
-                "protocol": device['protocol'],
-                "priority": device['priority'],
-                "total_down_bps": total_down_bps,
-                "total_up_bps": total_up_bps,
-            }
+            row = [
+                timestamp,
+                device['ip'],
+                device['up_bytes_per_sec'],
+                device['down_bytes_per_sec'],
+                device['protocol'],
+                device['priority'],
+                total_down_bps,
+                total_up_bps,
+            ]
             writer.writerow(row)
     
-    print(f"  Saved {len(devices)} devices to {WITHOUT_SYSTEM_CSV}")
+    print(f"  Appended {len(devices)} devices to {WITHOUT_SYSTEM_CSV}")
 
 
 def monitor(interface='wlp3s0', interval=5):
@@ -323,8 +332,6 @@ def monitor(interface='wlp3s0', interval=5):
             "down_bytes_per_sec": down_bytes_per_sec,
             "protocol": best_proto,
             "priority": priority,
-            "allocated_bytes_download": 0,
-            "allocated_bytes_upload": 0,
         }
         all_devices.append(device)
 
@@ -343,8 +350,25 @@ def monitor(interface='wlp3s0', interval=5):
     
     print(f"{'='*80}\n")
     
-    # Save to without_system.csv
+    # Save to CSV
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    save_without_system(all_devices, total_down_bps, total_up_bps, timestamp)
+    append_to_csv(all_devices, total_down_bps, total_up_bps, timestamp)
 
     return all_devices
+
+
+# For standalone testing
+if __name__ == "__main__":
+    import sys
+    interface = sys.argv[1] if len(sys.argv) > 1 else "wlp3s0"
+    interval = int(sys.argv[2]) if len(sys.argv) > 2 else 5
+    
+    print(f"\n=== WITHOUT SYSTEM MONITOR ===")
+    print(f"Interface: {interface}")
+    print(f"Interval: {interval} seconds")
+    print(f"CSV File: {WITHOUT_SYSTEM_CSV}\n")
+    
+    # Run once
+    devices = monitor(interface, interval)
+    
+    print(f"\nDone! Check {WITHOUT_SYSTEM_CSV} for data")
