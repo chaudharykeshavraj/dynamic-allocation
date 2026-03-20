@@ -14,7 +14,8 @@ MAX_HISTORY_POINTS = 120
 
 app = Flask(__name__, template_folder=os.path.join(os.path.dirname(__file__), 'templates'))
 
-# Tolerance for enforcement  match check
+# Tolerance for enforcement match check
+# is_match = True if enforced is within 10% of allocated
 MATCH_TOLERANCE = 0.10
 
 
@@ -38,15 +39,15 @@ def update_history(devices, updated_at):
 
         active_ips.add(ip)
         series = history_state.setdefault(ip, {
-            'time': [],
-            'demand': [],
-            'allocated': [],
-            'enforced': [],
+            'time'      : [],
+            'demand'    : [],
+            'allocated' : [],
+            'enforced'  : [],
         })
 
-        demand_bps = device.get('down_bytes_per_sec', 0) + device.get('up_bytes_per_sec', 0)
+        demand_bps    = device.get('down_bytes_per_sec', 0) + device.get('up_bytes_per_sec', 0)
         allocated_bps = device.get('allocated_bytes_download', 0) + device.get('allocated_bytes_upload', 0)
-        enforced_bps = device.get('enforced_down_bps', 0) + device.get('enforced_up_bps', 0)
+        enforced_bps  = device.get('enforced_down_bps', 0) + device.get('enforced_up_bps', 0)
 
         series['time'].append(time_label)
         series['demand'].append(_to_mbps(demand_bps))
@@ -54,10 +55,10 @@ def update_history(devices, updated_at):
         series['enforced'].append(_to_mbps(enforced_bps))
 
         if len(series['time']) > MAX_HISTORY_POINTS:
-            series['time'] = series['time'][-MAX_HISTORY_POINTS:]
-            series['demand'] = series['demand'][-MAX_HISTORY_POINTS:]
+            series['time']      = series['time'][-MAX_HISTORY_POINTS:]
+            series['demand']    = series['demand'][-MAX_HISTORY_POINTS:]
             series['allocated'] = series['allocated'][-MAX_HISTORY_POINTS:]
-            series['enforced'] = series['enforced'][-MAX_HISTORY_POINTS:]
+            series['enforced']  = series['enforced'][-MAX_HISTORY_POINTS:]
 
     stale_ips = [ip for ip in history_state if ip not in active_ips]
     for ip in stale_ips:
@@ -67,10 +68,10 @@ def update_history(devices, updated_at):
 def build_history():
     return {
         ip: {
-            'time': list(series['time']),
-            'demand': list(series['demand']),
-            'allocated': list(series['allocated']),
-            'enforced': list(series['enforced']),
+            'time'      : list(series['time']),
+            'demand'    : list(series['demand']),
+            'allocated' : list(series['allocated']),
+            'enforced'  : list(series['enforced']),
         }
         for ip, series in history_state.items()
     }
@@ -81,37 +82,45 @@ def build_devices():
     devices = []
 
     for device in live_state['devices']:
-        allocated_down_bps  = device.get('allocated_bytes_download', 0)
-        allocated_up_bps    = device.get('allocated_bytes_upload', 0)
-        demand_bps          = device.get('down_bytes_per_sec', 0) + device.get('up_bytes_per_sec', 0)
+        allocated_down_bps = device.get('allocated_bytes_download', 0)
+        allocated_up_bps   = device.get('allocated_bytes_upload', 0)
+        demand_down_bps    = device.get('down_bytes_per_sec', 0)
+        demand_up_bps      = device.get('up_bytes_per_sec', 0)
+        demand_bps         = demand_down_bps + demand_up_bps
 
-        # enforced values written by enforce.py
+        # actual throughput written by enforce.py read_stats()
+        # = real bytes/sec that flowed through tc last interval
+        # first cycle per device shows 0 → correct from second cycle onward
         enforced_down_bps = device.get('enforced_down_bps', 0)
-        enforced_up_bps   = device.get('enforced_up_bps', 0)
+        enforced_up_bps   = device.get('enforced_up_bps',   0)
 
         allocated_total = allocated_down_bps + allocated_up_bps
-        enforced_total  = enforced_down_bps + enforced_up_bps
+        enforced_total  = enforced_down_bps  + enforced_up_bps
 
-        # check if enforcement matches allocation within tolerance
+        # is_match: did actual enforced throughput land within 10% of allocation?
+        # compares real traffic (enforced) against mathematical target (allocated)
+        # not the tc configured rate — that always equals allocated exactly
         if allocated_total > 0:
-            deviation   = abs(enforced_total - allocated_total) / allocated_total
-            is_match    = deviation <= MATCH_TOLERANCE
+            deviation = abs(enforced_total - allocated_total) / allocated_total
+            is_match  = deviation <= MATCH_TOLERANCE
         else:
-            is_match = True  # if no allocation, nothing to match
+            is_match = True  # no allocation → nothing to match
 
         devices.append({
-            'ip'                : device.get('ip', ''),
-            'protocol'          : device.get('protocol', 'UNKNOWN'),
-            'priority'          : device.get('priority', 1),
-            'demand'            : round((demand_bps * 8) / 1_000_000, 2),  # convert to Mbps
-            'allocated'         : round(allocated_total * 8) / 1_000_000,
-            'down_allocated'    : round(allocated_down_bps * 8) / 1_000_000,
-            'up_allocated'      : round(allocated_up_bps * 8) / 1_000_000,
-            'enforced'          : round(enforced_total * 8) / 1_000_000,
-            'enforced_down'     : round(enforced_down_bps * 8) / 1_000_000,
-            'enforced_up'       : round(enforced_up_bps * 8) / 1_000_000,
-            'is_match'          : is_match,
-            'status'            : 'active' if demand_bps > 0 else 'idle',
+            'ip'             : device.get('ip', ''),
+            'protocol'       : device.get('protocol', 'UNKNOWN'),
+            'priority'       : device.get('priority', 1),
+            'demand'         : round((demand_bps         * 8) / 1_000_000, 2),
+            'demand_down'    : round((demand_down_bps    * 8) / 1_000_000, 2),
+            'demand_up'      : round((demand_up_bps      * 8) / 1_000_000, 2),
+            'allocated'      : round((allocated_total    * 8) / 1_000_000, 2),
+            'down_allocated' : round((allocated_down_bps * 8) / 1_000_000, 2),
+            'up_allocated'   : round((allocated_up_bps   * 8) / 1_000_000, 2),
+            'enforced'       : round((enforced_total     * 8) / 1_000_000, 2),
+            'enforced_down'  : round((enforced_down_bps  * 8) / 1_000_000, 2),
+            'enforced_up'    : round((enforced_up_bps    * 8) / 1_000_000, 2),
+            'is_match'       : is_match,
+            'status'         : 'active' if demand_bps > 0 else 'idle',
         })
 
     return devices
@@ -121,14 +130,14 @@ def build_totals(devices):
     """Compute summary totals from processed device list."""
     updated = live_state['updated']
     return {
-        'devices'       : len(devices),
-        'demand'        : round(sum(d['demand'] for d in devices), 2),
-        'allocated'     : round(sum(d['allocated'] for d in devices), 2),
-        'enforced'      : round(sum(d['enforced'] for d in devices), 2),
-        'down_pool'     : round(live_state['down_mbps'], 2),
-        'up_pool'       : round(live_state['up_mbps'], 2),
-        'time'          : updated.strftime('%Y-%m-%d %H:%M:%S') if updated else "-",
-        'date'          : updated.strftime('%Y-%m-%d') if updated else "-",
+        'devices'   : len(devices),
+        'demand'    : round(sum(d['demand']    for d in devices), 2),
+        'allocated' : round(sum(d['allocated'] for d in devices), 2),
+        'enforced'  : round(sum(d['enforced']  for d in devices), 2),
+        'down_pool' : round(live_state['down_mbps'], 2),
+        'up_pool'   : round(live_state['up_mbps'],   2),
+        'time'      : updated.strftime('%Y-%m-%d %H:%M:%S') if updated else "-",
+        'date'      : updated.strftime('%Y-%m-%d')          if updated else "-",
     }
 
 
@@ -146,9 +155,9 @@ def api_data():
     totals  = build_totals(devices)
     history = build_history()
     return jsonify({
-        'devices': devices,
-        'totals' : totals,
-        'history': history,
+        'devices' : devices,
+        'totals'  : totals,
+        'history' : history,
     })
 
 
