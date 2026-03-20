@@ -11,7 +11,16 @@ OUTPUT_FOLDER = os.path.join(ML_DIR, 'training')
 
 WINDOW_SIZE   = 3
 
-# protocol string → integer
+# ── Data-Driven Thresholds ────────────────────────────────────
+# derived from quartile analysis of 134 minutes real traffic data
+# 5 devices, 5348 rows total
+# each class = exactly 25% of observed traffic
+
+THRESHOLD_IDLE_LOW    = 150       # 25th percentile = 150 bytes/sec
+THRESHOLD_LOW_MEDIUM  = 6446      # 50th percentile = 6446 bytes/sec
+THRESHOLD_MEDIUM_HIGH = 299445    # 75th percentile = 299445 bytes/sec
+
+# ── Protocol Map ──────────────────────────────────────────────
 PROTOCOL_MAP = {
     'YOUTUBE'        : 0,
     'ZOOM'           : 1,
@@ -44,20 +53,20 @@ def encode_protocol(protocol_str):
 
 def get_traffic_class(bytes_per_sec):
     """
-    Convert bytes/sec to traffic class.
-    Boundaries raised to reduce IDLE dominance.
+    Convert bytes/sec to traffic class using data-driven thresholds.
+    Thresholds derived from quartile analysis of real traffic data.
+    Gives balanced 25% distribution per class.
 
-    Class 0 = IDLE   → below 50 KB/s
-    Class 1 = LOW    → 50 to 200 KB/s
-    Class 2 = MEDIUM → 200 to 600 KB/s
-    Class 3 = HIGH   → above 600 KB/s
+    Class 0 = IDLE   → below 150 bytes/sec     (near zero activity)
+    Class 1 = LOW    → 150 to 6446 bytes/sec    (light background)
+    Class 2 = MEDIUM → 6446 to 299445 bytes/sec (moderate usage)
+    Class 3 = HIGH   → above 299445 bytes/sec   (heavy streaming)
     """
-    kb = bytes_per_sec / 1024
-    if kb < 50:
+    if bytes_per_sec < THRESHOLD_IDLE_LOW:
         return 0   # IDLE
-    elif kb < 200:
+    elif bytes_per_sec < THRESHOLD_LOW_MEDIUM:
         return 1   # LOW
-    elif kb < 600:
+    elif bytes_per_sec < THRESHOLD_MEDIUM_HIGH:
         return 2   # MEDIUM
     else:
         return 3   # HIGH
@@ -66,7 +75,7 @@ def compute_features(d1, d2, d3):
     """
     Compute all features from 3 consecutive rows.
     d1 = oldest, d2 = middle, d3 = most recent.
-    Called identically in training and prediction.
+    Same function used in both training and prediction.
     """
 
     down_t1 = float(d1['down_bytes_per_sec'])
@@ -96,18 +105,18 @@ def compute_features(d1, d2, d3):
         "up_class_t2"   : get_traffic_class(up_t2),
         "up_class_t3"   : get_traffic_class(up_t3),
 
-        # trend — direction of change
-        # positive = demand rising, negative = falling
+        # trend — is demand rising or falling
+        # positive = rising, negative = falling
         "down_delta1"   : down_t2 - down_t1,   # older change
         "down_delta2"   : down_t3 - down_t2,   # recent change
         "up_delta1"     : up_t2   - up_t1,
         "up_delta2"     : up_t3   - up_t2,
 
-        # average — smoothed baseline, removes single spike effect
+        # average — smoothed baseline
         "avg_down"      : (down_t1 + down_t2 + down_t3) / 3,
         "avg_up"        : (up_t1   + up_t2   + up_t3)   / 3,
 
-        # burstiness — high = web browsing, low = streaming
+        # burstiness — high = bursty, low = smooth streaming
         "burst_down"    : max(down_t1, down_t2, down_t3) - min(down_t1, down_t2, down_t3),
         "burst_up"      : max(up_t1,   up_t2,   up_t3)   - min(up_t1,   up_t2,   up_t3),
 
@@ -123,8 +132,8 @@ def prepare_device(filepath, output_path):
     """
     Read one device CSV.
     Apply sliding window of size 3.
-    Label = traffic class of next interval (not raw bytes).
-    Save training CSV to training folder.
+    Label = traffic class of next interval.
+    Save training CSV.
     """
 
     df = pd.read_csv(filepath)
@@ -144,9 +153,13 @@ def prepare_device(filepath, output_path):
 
         feature_row = compute_features(d1, d2, d3)
 
-        # classification labels
-        feature_row['next_down_class'] = get_traffic_class(float(label['down_bytes_per_sec']))
-        feature_row['next_up_class']   = get_traffic_class(float(label['up_bytes_per_sec']))
+        # classification labels using data-driven thresholds
+        feature_row['next_down_class'] = get_traffic_class(
+            float(label['down_bytes_per_sec'])
+        )
+        feature_row['next_up_class'] = get_traffic_class(
+            float(label['up_bytes_per_sec'])
+        )
 
         rows.append(feature_row)
 
@@ -179,6 +192,18 @@ def prepare_all():
         total += rows
 
     print(f"\nTotal training rows = {total}")
+
+    # show class distribution after new thresholds
+    print(f"\n=== Class Distribution With New Thresholds ===")
+    all_rows = pd.concat([
+        pd.read_csv(os.path.join(OUTPUT_FOLDER, f))
+        for f in os.listdir(OUTPUT_FOLDER)
+        if f.endswith('.csv')
+    ])
+    dist = all_rows['next_down_class'].value_counts().sort_index()
+    names = {0:'IDLE', 1:'LOW', 2:'MEDIUM', 3:'HIGH'}
+    for cls, count in dist.items():
+        print(f"  {names[cls]:<8} = {count:5d} ({count/len(all_rows)*100:.1f}%)")
 
 if __name__ == "__main__":
     prepare_all()

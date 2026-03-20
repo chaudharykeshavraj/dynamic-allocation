@@ -64,7 +64,7 @@ def train_device(filepath, device_name):
     # creates synthetic samples for minority classes
     # only applied to training — never test set
     try:
-        sm                             = SMOTE(random_state=42, k_neighbors=3)
+        sm             = SMOTE(random_state=42, k_neighbors=3)
         X_train_down, yd_train_bal     = sm.fit_resample(X_train, yd_train)
         print(f"  SMOTE download — balanced")
     except Exception as e:

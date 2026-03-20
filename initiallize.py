@@ -1,11 +1,8 @@
 import subprocess
 from ml_part.predict import initialize_all_devices, get_known_ips
 
-# default values for devices with no trained model
-DEFAULT_PRIORITY   = 1
-DEFAULT_DOWN_BYTES = 100 * 1024   # 100 KB/s seed
-DEFAULT_UP_BYTES   = 100 * 1024   # 100 KB/s seed
-DEFAULT_PROTOCOL   = 'UNKNOWN'
+DEFAULT_PRIORITY = 1
+DEFAULT_PROTOCOL = 'UNKNOWN'
 
 def get_connected_ips(interface):
     """
@@ -39,14 +36,9 @@ def initiallize(interface, down_bps, up_bps):
     Called ONCE at startup before main loop.
 
     Step 1 → ARP scan finds connected devices
-    Step 2 → get_known_ips() from predict.py
-             finds connected devices that have trained models
-    Step 3 → initialize_all_devices() from predict.py
-             loads last 3 rows from dataset/ per device
-             predicts traffic class using trained model
-             maps class to seed demand bytes
-             returns device list with seed demand + nDPI priority
-    Step 4 → devices WITHOUT model get default seed demand
+    Step 2 → get_known_ips() finds devices with trained models
+    Step 3 → initialize_all_devices() predicts class → seed demand
+    Step 4 → devices WITHOUT model get fair share default
     Step 5 → returns ALL connected devices ready for allocation.py
     """
 
@@ -61,8 +53,7 @@ def initiallize(interface, down_bps, up_bps):
 
     print(f"  Connected devices  : {connected_ips}")
 
-    # step 2 — get_known_ips() from predict.py
-    # scans ml_part/models/ for devices with trained pkl files
+    # step 2 — find which have trained models
     known_ips     = get_known_ips()
     with_model    = [ip for ip in connected_ips if ip     in known_ips]
     without_model = [ip for ip in connected_ips if ip not in known_ips]
@@ -72,23 +63,27 @@ def initiallize(interface, down_bps, up_bps):
 
     all_initial_devices = []
 
-    # step 3 — initialize_all_devices() from predict.py
-    # loads last 3 rows from dataset/ip.csv
-    # predicts class → maps to seed bytes
-    # priority taken from nDPI history in CSV (NOT from ML)
+    # step 3 — ML initialization for known devices
     if len(with_model) > 0:
         ml_devices = initialize_all_devices(with_model)
         all_initial_devices.extend(ml_devices)
         print(f"  ML initiallized    : {len(ml_devices)} devices")
 
-    # step 4 — devices without model get default values
+    # step 4 — unknown devices get fair share of pool
+    # fair share = total pool / total connected devices
+    # better than fixed 100 KB/s which ignores network size
+    n_total         = max(len(connected_ips), 1)
+    default_down    = down_bps / n_total   # fair share of download pool
+    default_up      = up_bps   / n_total   # fair share of upload pool
+
     for ip in without_model:
-        print(f"  {ip} → no model, using defaults")
+        print(f"  {ip} → no model → fair share default "
+              f"({default_down/1024:.1f} KB/s down, {default_up/1024:.1f} KB/s up)")
 
         all_initial_devices.append({
             "ip"                       : ip,
-            "down_bytes_per_sec"       : DEFAULT_DOWN_BYTES,
-            "up_bytes_per_sec"         : DEFAULT_UP_BYTES,
+            "down_bytes_per_sec"       : default_down,
+            "up_bytes_per_sec"         : default_up,
             "protocol"                 : DEFAULT_PROTOCOL,
             "priority"                 : DEFAULT_PRIORITY,
             "allocated_bytes_download" : 0,
