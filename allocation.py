@@ -103,20 +103,4 @@ def allocate(all_devices, download_bytes_per_sec, upload_bytes_per_sec):
         for d in all_devices:
             d['allocated_bytes_upload'] *= s
 
-    # save CSV
-    file_path   = "result/allocate_vs_demand.csv"
-    file_exists = os.path.isfile(file_path)
-    fieldnames  = ["timestamp","ip","up_bytes_per_sec","down_bytes_per_sec",
-                   "protocol","priority","allocated_bytes_download","allocated_bytes_upload"]
-    os.makedirs("result", exist_ok=True)
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with open(file_path, mode="a", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=fieldnames)
-        if not file_exists:
-            writer.writeheader()
-        for d in all_devices:
-            row = d.copy()
-            row["timestamp"] = timestamp
-            writer.writerow(row)
-
     return all_devices

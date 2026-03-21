@@ -17,19 +17,21 @@ _prev_backlog_up   = defaultdict(int)
 # FIX: tc dropped = PACKETS not bytes
 AVG_PACKET_SIZE = 1200
 
+# ── Priority Table ────────────────────────────────────────────
 PROTOCOL_PRIORITY = {
-    "WHATSAPP_CALL": 5, "ZOOM": 5, "SKYPE": 5, "GOOGLE_MEET": 5,
+    "WHATSAPP_CALL": 5, "ZOOM": 5, "MICROSOFT_TEAMS": 5, "GOOGLE_MEET": 5,
     "DISCORD": 5, "VIBER_CALL": 5, "RTP": 5, "FACETIME": 5,
     "STEAM": 4, "XBOX": 4, "PLAYSTATION": 4, "ROBLOX": 4,
     "PUBG": 4, "SUPERCELL": 4, "FREEFIRE": 4, "MOBILELEGENDS": 4,
     "YOUTUBE": 3, "NETFLIX": 3, "TIKTOK": 3, "INSTAGRAM": 3,
+    "SPOTIFY": 3, "APPLEPUSH": 3, "APNS": 3, "APPLE": 3,
     "VIBER_MESSAGE": 2, "FACEBOOK": 2, "TWITTER": 2,
     "ESEWA": 2, "HTTP": 2, "HTTPS": 2,
-    "BITTORRENT": 1, "UNKNOWN": 1,"HTTP_PROXY"  : 2,    # was defaulting to 1 as UNKNOWN
-"APPLEPUSH"   : 3,    # Apple push = active app = should be priority 3
-"APNS"        : 3,"APPLE" : 3,
+    "HTTP_PROXY": 2, "GOOGLE_PLAY": 2,
+    "BITTORRENT": 1, "UNKNOWN": 1,
 }
 
+# ── nDPI → Our Protocol ───────────────────────────────────────
 NFSTREAM_TO_PROTOCOL = {
     "TLS.Instagram": "INSTAGRAM", "Instagram": "INSTAGRAM",
     "Instagram_Video": "INSTAGRAM", "QUIC.Instagram": "INSTAGRAM",
@@ -51,8 +53,8 @@ NFSTREAM_TO_PROTOCOL = {
     "GoogleMeet": "GOOGLE_MEET", "Google_Meet": "GOOGLE_MEET",
     "DNS.GoogleMeet": "GOOGLE_MEET",
     "Discord": "DISCORD", "DNS.Discord": "DISCORD",
-    "Skype": "SKYPE", "SkypeTeams": "SKYPE",
-    "SKYPE_TEAMS": "SKYPE", "MicrosoftTeams": "SKYPE",
+    "Skype": "MICROSOFT_TEAMS", "SkypeTeams": "MICROSOFT_TEAMS",
+    "SKYPE_TEAMS": "MICROSOFT_TEAMS", "MicrosoftTeams": "MICROSOFT_TEAMS",
     "RTP": "RTP", "RTCP": "RTP", "SIP": "RTP", "STUN": "RTP",
     "TikTok": "TIKTOK", "DNS.TikTok": "TIKTOK",
     "Netflix": "NETFLIX", "DNS.Netflix": "NETFLIX",
@@ -67,18 +69,33 @@ NFSTREAM_TO_PROTOCOL = {
     "BitTorrent": "BITTORRENT", "Bittorrent": "BITTORRENT",
     "uTorrent": "BITTORRENT",
     "TLS": "HTTPS", "SSL": "HTTPS", "QUIC": "HTTPS",
+    "Spotify": "SPOTIFY", "TLS.Spotify": "SPOTIFY",
+    "QUIC.Spotify": "SPOTIFY", "DNS.Spotify": "SPOTIFY",
+    "ApplePush": "APPLEPUSH", "APPLEPUSH": "APPLEPUSH",
+    "AppleID": "APPLE", "Apple": "APPLE",
+    "TLS.Apple": "APPLE", "DNS.Apple": "APPLE",
+    "HTTP_Proxy": "HTTP_PROXY", "HTTPProxy": "HTTP_PROXY",
+    "GooglePlay": "GOOGLE_PLAY", "TLS.GooglePlay": "GOOGLE_PLAY",
 }
 
+# ── IP Range → Protocol ───────────────────────────────────────
 IP_TO_PROTOCOL = [
     ("142.250.", "YOUTUBE"), ("216.58.", "YOUTUBE"),
     ("172.217.", "YOUTUBE"), ("74.125.", "YOUTUBE"),
-    ("157.240.", "FACEBOOK"), ("179.60.", "FACEBOOK"),
+    ("216.239.", "YOUTUBE"),   # Google backbone — YouTube/Meet/Play metadata
+    ("124.41.",  "YOUTUBE"),   # Vianet Nepal CDN — local YouTube cache
+    ("157.240.", "INSTAGRAM"), ("179.60.", "INSTAGRAM"),
     ("31.13.", "FACEBOOK"), ("66.220.", "FACEBOOK"), ("69.63.", "FACEBOOK"),
+    ("103.211.", "INSTAGRAM"), # Meta CDN India — confirmed in iftop
     ("50.22.", "WHATSAPP_CALL"), ("54.148.", "WHATSAPP_CALL"),
     ("23.246.", "NETFLIX"), ("37.77.", "NETFLIX"), ("198.38.", "NETFLIX"),
     ("161.117.", "TIKTOK"), ("103.45.", "TIKTOK"), ("120.232.", "TIKTOK"),
     ("3.7.", "ZOOM"), ("99.79.", "ZOOM"), ("170.114.", "ZOOM"),
     ("162.159.", "DISCORD"), ("66.22.", "DISCORD"),
+    ("57.144.", "SPOTIFY"),    # Spotify — confirmed in iftop
+    ("17.57.",  "APPLE"),      # Apple push — seen as 17.57.145.25 in iftop
+    ("17.248.", "APPLE"), ("17.172.", "APPLE"),
+    ("139.5.",  "GOOGLE_PLAY"), # Jio India CDN — app downloads
     ("93.184.", "SUPERCELL"), ("185.60.", "SUPERCELL"),
     ("103.28.", "PUBG"), ("110.93.", "PUBG"),
     ("103.69.", "ESEWA"), ("103.1.", "ESEWA"),
@@ -86,6 +103,7 @@ IP_TO_PROTOCOL = [
     ("108.177.", "GOOGLE_MEET"), ("185.25.", "STEAM"),
 ]
 
+# ── Port → Protocol ───────────────────────────────────────────
 PORT_TO_PROTOCOL = {
     10012: "PUBG", 7777: "PUBG",
     9339: "SUPERCELL", 9340: "SUPERCELL",
@@ -94,6 +112,9 @@ PORT_TO_PROTOCOL = {
     4244: "WHATSAPP_CALL", 5242: "WHATSAPP_CALL",
     8801: "ZOOM", 8802: "ZOOM",
     50000: "DISCORD",
+    5222: "SPOTIFY",      # xmpp-client — confirmed in iftop
+    5228: "GOOGLE_PLAY",  # Google Play Services push — confirmed in iftop
+    2195: "APPLEPUSH", 2196: "APPLEPUSH",
 }
 
 _protocol_cache      = {}

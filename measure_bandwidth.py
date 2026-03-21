@@ -4,8 +4,8 @@ import subprocess
 # ── SET THESE ONCE ────────────────────────────────────────────
 # Measure using speedtest on a connected device
 # Your WiFi hotspot capacity from testing = ~10 Mbps down, ~4 Mbps up
-WIFI_DOWN_MBPS = 14.0
-WIFI_UP_MBPS   = 4.0
+WIFI_DOWN_MBPS = 9.0
+WIFI_UP_MBPS   = 3.0
  
 # tc gets 90% of real capacity
 # ensures tc drops packets BEFORE WiFi hardware

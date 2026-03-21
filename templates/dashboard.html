@@ -237,7 +237,6 @@
         <thead>
             <tr>
                 <th>IP Address</th>
-                <th>Protocol</th>
                 <th>Priority</th>
                 <th>Demand (Mbps)</th>
                 <th>Allocated (Mbps)</th>
@@ -249,7 +248,6 @@
             {% for device in devices %}
             <tr>
                 <td><span class="ip-address">{{ device.ip }}</span></td>
-                <td>{{ device.protocol }}</td>
                 <td>
                     <span class="priority priority-{{ device.priority }}">{{ device.priority }}</span>
                 </td>
@@ -410,7 +408,6 @@
 
                 html += `<tr>
                     <td><span class="ip-address">${d.ip}</span></td>
-                    <td>${d.protocol}</td>
                     <td><span class="priority priority-${d.priority}">${d.priority}</span></td>
                     <td>${d.demand.toFixed(2)}</td>
                     <td>

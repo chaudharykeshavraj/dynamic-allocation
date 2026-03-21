@@ -108,7 +108,6 @@ def build_devices():
 
         devices.append({
             'ip'             : device.get('ip', ''),
-            'protocol'       : device.get('protocol', 'UNKNOWN'),
             'priority'       : device.get('priority', 1),
             'demand'         : round((demand_bps         * 8) / 1_000_000, 2),
             'demand_down'    : round((demand_down_bps    * 8) / 1_000_000, 2),
