@@ -5,8 +5,8 @@ import subprocess
 # Run speedtest on a connected device and set these values.
 # These are the real WiFi hotspot throughput limits.
 # Your measured values: ~6 Mbps down, ~2 Mbps up
-WIFI_DOWN_MBPS = 8.0
-WIFI_UP_MBPS   = 4.0
+WIFI_DOWN_MBPS = 11.0
+WIFI_UP_MBPS   = 5.0
  
 # tc headroom — set pool slightly below real capacity
 # so tc drops packets BEFORE WiFi hardware does

@@ -25,7 +25,9 @@ PROTOCOL_PRIORITY = {
     "YOUTUBE": 3, "NETFLIX": 3, "TIKTOK": 3, "INSTAGRAM": 3,
     "VIBER_MESSAGE": 2, "FACEBOOK": 2, "TWITTER": 2,
     "ESEWA": 2, "HTTP": 2, "HTTPS": 2,
-    "BITTORRENT": 1, "UNKNOWN": 1,
+    "BITTORRENT": 1, "UNKNOWN": 1,"HTTP_PROXY"  : 2,    # was defaulting to 1 as UNKNOWN
+"APPLEPUSH"   : 3,    # Apple push = active app = should be priority 3
+"APNS"        : 3,"APPLE" : 3,
 }
 
 NFSTREAM_TO_PROTOCOL = {
