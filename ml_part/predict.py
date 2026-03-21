@@ -2,7 +2,7 @@ import pandas as pd
 import pickle
 import os
 
-from .prepare_dataset import (
+from prepare_dataset import (
     compute_features,
     encode_protocol,
     get_traffic_class,
