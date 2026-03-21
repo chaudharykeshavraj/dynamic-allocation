@@ -8,18 +8,15 @@ import re
 import threading
 from collections import defaultdict
 
-# ── tc demand boost state ─────────────────────────────────────
-# SEPARATED into down (wlp3s0) and up (ifb0) directions
-# cumulative counters — subtract previous to get THIS interval
-_prev_drops_down   = defaultdict(int)   # class_id(int) → cumulative packets dropped
+# FIX: separated into down/up, stored as INT keys
+_prev_drops_down   = defaultdict(int)
 _prev_drops_up     = defaultdict(int)
-_prev_backlog_down = defaultdict(int)   # class_id(int) → backlog bytes
+_prev_backlog_down = defaultdict(int)
 _prev_backlog_up   = defaultdict(int)
 
-# FIX: tc dropped = PACKETS not bytes — multiply to convert
-AVG_PACKET_SIZE = 1200   # bytes
+# FIX: tc dropped = PACKETS not bytes
+AVG_PACKET_SIZE = 1200
 
-# ── Priority Table ────────────────────────────────────────────
 PROTOCOL_PRIORITY = {
     "WHATSAPP_CALL": 5, "ZOOM": 5, "SKYPE": 5, "GOOGLE_MEET": 5,
     "DISCORD": 5, "VIBER_CALL": 5, "RTP": 5, "FACETIME": 5,
@@ -31,7 +28,6 @@ PROTOCOL_PRIORITY = {
     "BITTORRENT": 1, "UNKNOWN": 1,
 }
 
-# ── nDPI → Our Protocol ───────────────────────────────────────
 NFSTREAM_TO_PROTOCOL = {
     "TLS.Instagram": "INSTAGRAM", "Instagram": "INSTAGRAM",
     "Instagram_Video": "INSTAGRAM", "QUIC.Instagram": "INSTAGRAM",
@@ -71,7 +67,6 @@ NFSTREAM_TO_PROTOCOL = {
     "TLS": "HTTPS", "SSL": "HTTPS", "QUIC": "HTTPS",
 }
 
-# ── IP Range → Protocol ───────────────────────────────────────
 IP_TO_PROTOCOL = [
     ("142.250.", "YOUTUBE"), ("216.58.", "YOUTUBE"),
     ("172.217.", "YOUTUBE"), ("74.125.", "YOUTUBE"),
@@ -89,7 +84,6 @@ IP_TO_PROTOCOL = [
     ("108.177.", "GOOGLE_MEET"), ("185.25.", "STEAM"),
 ]
 
-# ── Port → Protocol ───────────────────────────────────────────
 PORT_TO_PROTOCOL = {
     10012: "PUBG", 7777: "PUBG",
     9339: "SUPERCELL", 9340: "SUPERCELL",
@@ -100,7 +94,6 @@ PORT_TO_PROTOCOL = {
     50000: "DISCORD",
 }
 
-# ── Protocol Cache ────────────────────────────────────────────
 _protocol_cache      = {}
 _protocol_confidence = defaultdict(int)
 _cache_timeout_secs  = 60
@@ -133,8 +126,7 @@ def normalize_protocol(proto):
     return proto.upper()
 
 def get_priority(protocol_name):
-    key = normalize_protocol(protocol_name)
-    return PROTOCOL_PRIORITY.get(key, 1)
+    return PROTOCOL_PRIORITY.get(normalize_protocol(protocol_name), 1)
 
 def get_flows(interface, duration):
     with tempfile.NamedTemporaryFile(mode='r+', suffix='.json', delete=False) as tmp:
@@ -174,7 +166,6 @@ def aggregate_flows(flows):
         xfer     = f.get('xfer', {})
         up_bytes   = xfer.get('src2dst_bytes', 0)
         down_bytes = xfer.get('dst2src_bytes', 0)
-
         if src_ip and src_ip.startswith('192.168.'):
             devices[src_ip]['up']                      += up_bytes
             devices[src_ip]['protocols'][proto]        += up_bytes
@@ -182,7 +173,6 @@ def aggregate_flows(flows):
                 devices[src_ip]['dst_ips'][dst_ip]     += up_bytes
             if dst_port:
                 devices[src_ip]['dst_ports'][dst_port] += up_bytes
-
         if dst_ip and dst_ip.startswith('192.168.'):
             devices[dst_ip]['down']                    += down_bytes
             devices[dst_ip]['protocols'][proto]        += down_bytes
@@ -193,73 +183,50 @@ def aggregate_flows(flows):
     return devices
 
 def resolve_best_protocol(ip, ndpi_proto, ndpi_devices, now):
-    global _protocol_cache, _protocol_confidence
-
     normalized = normalize_protocol(ndpi_proto)
-
-    high_confidence_protocols = (
+    high_confidence = (
         'WHATSAPP_CALL', 'ZOOM', 'SKYPE', 'GOOGLE_MEET', 'DISCORD',
         'VIBER_CALL', 'RTP', 'STEAM', 'XBOX', 'PLAYSTATION', 'ROBLOX',
         'PUBG', 'SUPERCELL', 'YOUTUBE', 'NETFLIX', 'TIKTOK',
     )
-
-    if normalized in high_confidence_protocols:
+    if normalized in high_confidence:
         _protocol_confidence[ip] = MIN_CONFIDENCE
         _protocol_cache[ip]      = (normalized, now)
         return normalized
-
     cached = _protocol_cache.get(ip)
     if cached and _protocol_confidence[ip] >= MIN_CONFIDENCE:
         cached_proto, cached_time = cached
         if now - cached_time < _cache_timeout_secs:
             return cached_proto
-
     if ip in ndpi_devices:
-        dst_ips = ndpi_devices[ip].get('dst_ips', {})
-        for dst_ip in sorted(dst_ips, key=dst_ips.get, reverse=True)[:5]:
+        for dst_ip in sorted(ndpi_devices[ip].get('dst_ips', {}),
+                             key=ndpi_devices[ip]['dst_ips'].get, reverse=True)[:5]:
             ip_proto = identify_from_ip(dst_ip)
             if ip_proto:
                 _protocol_confidence[ip] = _protocol_confidence.get(ip, 0) + 1
                 if _protocol_confidence[ip] >= MIN_CONFIDENCE:
                     _protocol_cache[ip] = (ip_proto, now)
                 return ip_proto
-
-        dst_ports = ndpi_devices[ip].get('dst_ports', {})
-        for port in sorted(dst_ports, key=dst_ports.get, reverse=True)[:3]:
+        for port in sorted(ndpi_devices[ip].get('dst_ports', {}),
+                           key=ndpi_devices[ip]['dst_ports'].get, reverse=True)[:3]:
             port_proto = identify_from_port(int(port))
             if port_proto:
                 _protocol_confidence[ip] = _protocol_confidence.get(ip, 0) + 1
                 if _protocol_confidence[ip] >= MIN_CONFIDENCE:
                     _protocol_cache[ip] = (port_proto, now)
                 return port_proto
-
     _protocol_confidence[ip] = max(0, _protocol_confidence.get(ip, 0) - 1)
-
     if cached:
         cached_proto, cached_time = cached
         if now - cached_time < _cache_timeout_secs:
             return cached_proto
-
     return normalized
 
 def _parse_tc_boost(tc_output, prev_drops, prev_backlog, interval):
     """
-    Parse tc -s class show output for ONE interface.
-    Returns dict: class_id (INT) → extra_bytes_per_sec
-
-    FIX 1: class_id stored as INT not string
-            class_to_ip in monitor uses int keys from known_devices
-            string '1:10' would never match int key 10
-
-    FIX 2: dropped counter is PACKETS not bytes
-            multiply by AVG_PACKET_SIZE to convert to bytes
-            tc output: 'dropped 823' = 823 packets dropped
-
-    FIX 3: backlog already in BYTES (has 'b' suffix)
-            no conversion needed for backlog
-
-    FIX 4: skip class 1:1 (master) and 1:999 (default)
-            1:1 = sum of ALL devices = massive inflation
+    FIX 1: class_id stored as INT (not string like '1:10')
+    FIX 2: dropped = PACKETS → multiply by AVG_PACKET_SIZE for bytes
+    FIX 3: skip class 1 and 999 (master/default, not device classes)
     """
     extra    = {}
     curr_id  = None
@@ -269,52 +236,32 @@ def _parse_tc_boost(tc_output, prev_drops, prev_backlog, interval):
 
     for line in tc_output.splitlines():
         line = line.strip()
-
-        # new HTB class line — extract numeric class_id
         m = re.search(r'class htb 1:(\d+)', line)
         if m:
-            # save previous class before moving to next
             if curr_id is not None and curr_id not in SKIP_IDS:
-                drops_this    = max(0, dropped - prev_drops[curr_id])
-                backlog_this  = max(0, backlog  - prev_backlog[curr_id])
-
-                # FIX: dropped is PACKETS → convert to BYTES
+                drops_this   = max(0, dropped - prev_drops[curr_id])
+                backlog_this = max(0, backlog  - prev_backlog[curr_id])
+                # FIX: convert PACKETS to BYTES
                 dropped_bytes = drops_this * AVG_PACKET_SIZE
-
-                # backlog is already BYTES — no conversion
                 if interval > 0:
                     extra[curr_id] = (dropped_bytes + backlog_this) / interval
-
-                # update cumulative counters for next interval
                 prev_drops[curr_id]   = dropped
                 prev_backlog[curr_id] = backlog
-
-            cid = int(m.group(1))   # FIX: store as INT
-            if cid in SKIP_IDS:
-                curr_id = None
-                continue
-            curr_id = cid
-            dropped = 0
-            backlog = 0
+            cid = int(m.group(1))   # FIX: INT not string
+            curr_id = None if cid in SKIP_IDS else cid
+            dropped = backlog = 0
             continue
-
-        # skip fq_codel lines completely
         if 'class fq_codel' in line:
             curr_id = None
             continue
-
         if curr_id is not None and curr_id not in SKIP_IDS:
-            # backlog: "backlog 45234b 32p" → bytes (already)
             m = re.search(r'backlog\s+(\d+)b', line)
             if m:
                 backlog = int(m.group(1))
-
-            # dropped: "dropped 823, overlimits" → PACKETS
             m = re.search(r'dropped\s+(\d+)', line)
             if m:
                 dropped = int(m.group(1))
 
-    # save last class
     if curr_id is not None and curr_id not in SKIP_IDS:
         drops_this    = max(0, dropped - prev_drops[curr_id])
         backlog_this  = max(0, backlog  - prev_backlog[curr_id])
@@ -323,54 +270,33 @@ def _parse_tc_boost(tc_output, prev_drops, prev_backlog, interval):
             extra[curr_id] = (dropped_bytes + backlog_this) / interval
         prev_drops[curr_id]   = dropped
         prev_backlog[curr_id] = backlog
-
     return extra
 
 def get_tc_demand_boost(interface, interval):
-    """
-    FIX: Read down and up separately from correct interfaces.
-    wlp3s0 = download path → down boost
-    ifb0   = upload path   → up boost
-
-    Returns:
-      ip_extra_down: ip → extra bytes/sec for download
-      ip_extra_up:   ip → extra bytes/sec for upload
-    """
+    """FIX: separate down (wlp3s0) and up (ifb0) boosts"""
     ip_extra_down = {}
     ip_extra_up   = {}
-
     try:
         from enforce import known_devices
-        # class_to_ip: int class_id → ip string
         class_to_ip = {v: k for k, v in known_devices.items()}
 
-        # download drops from wlp3s0 egress
         down_raw   = subprocess.run(
             ['tc', '-s', 'class', 'show', 'dev', interface],
-            capture_output=True, text=True
-        ).stdout
-        down_extra = _parse_tc_boost(
-            down_raw, _prev_drops_down, _prev_backlog_down, interval
-        )
-        for cid, extra in down_extra.items():
+            capture_output=True, text=True).stdout
+        for cid, extra in _parse_tc_boost(
+                down_raw, _prev_drops_down, _prev_backlog_down, interval).items():
             if cid in class_to_ip:
                 ip_extra_down[class_to_ip[cid]] = extra
 
-        # upload drops from ifb0 egress
         up_raw   = subprocess.run(
             ['tc', '-s', 'class', 'show', 'dev', 'ifb0'],
-            capture_output=True, text=True
-        ).stdout
-        up_extra = _parse_tc_boost(
-            up_raw, _prev_drops_up, _prev_backlog_up, interval
-        )
-        for cid, extra in up_extra.items():
+            capture_output=True, text=True).stdout
+        for cid, extra in _parse_tc_boost(
+                up_raw, _prev_drops_up, _prev_backlog_up, interval).items():
             if cid in class_to_ip:
                 ip_extra_up[class_to_ip[cid]] = extra
-
     except Exception as e:
-        print(f"  tc demand boost error: {e}")
-
+        print(f"  tc boost error: {e}")
     return ip_extra_down, ip_extra_up
 
 def monitor(interface='wlp3s0', interval=5):
@@ -391,23 +317,19 @@ def monitor(interface='wlp3s0', interval=5):
     def run_ndpi():
         flows_result[0] = get_flows(interface, interval)
 
-    # run scapy + ndpiReader simultaneously — total time = interval sec
     print(f"[{time.strftime('%H:%M:%S')}] Capturing for {interval} seconds...")
     ndpi_thread = threading.Thread(target=run_ndpi)
     ndpi_thread.start()
     sniff(iface=interface, prn=count_packet, timeout=interval, store=False)
     ndpi_thread.join(timeout=interval + 3)
 
-    print(f"[{time.strftime('%H:%M:%S')}] Processing results...")
-
     flows     = flows_result[0] or []
     ndpi_data = aggregate_flows(flows)
 
-    # get tc demand boost — down and up separately
+    # FIX: separate down and up boost
     ip_extra_down, ip_extra_up = get_tc_demand_boost(interface, interval)
 
     all_ips = set(tx_bytes.keys()) | set(rx_bytes.keys()) | set(ndpi_data.keys())
-
     if not all_ips:
         print("  No devices detected.")
         return []
@@ -416,13 +338,10 @@ def monitor(interface='wlp3s0', interval=5):
     all_devices = []
 
     for ip in sorted(all_ips):
-        up   = tx_bytes.get(ip, 0)
-        down = rx_bytes.get(ip, 0)
+        up_per_sec   = tx_bytes.get(ip, 0) / interval
+        down_per_sec = rx_bytes.get(ip, 0) / interval
 
-        up_per_sec   = up   / interval
-        down_per_sec = down / interval
-
-        # FIX: add boost to CORRECT direction separately
+        # FIX: add boost to correct direction
         down_per_sec += ip_extra_down.get(ip, 0)
         up_per_sec   += ip_extra_up.get(ip, 0)
 
@@ -433,14 +352,13 @@ def monitor(interface='wlp3s0', interval=5):
             raw_proto = 'UNKNOWN'
 
         best_proto = resolve_best_protocol(ip, raw_proto, ndpi_data, now)
-        priority   = get_priority(best_proto)
 
         all_devices.append({
             "ip"                       : ip,
             "up_bytes_per_sec"         : up_per_sec,
             "down_bytes_per_sec"       : down_per_sec,
             "protocol"                 : best_proto,
-            "priority"                 : priority,
+            "priority"                 : get_priority(best_proto),
             "allocated_bytes_download" : 0,
             "allocated_bytes_upload"   : 0,
         })
@@ -453,5 +371,4 @@ def monitor(interface='wlp3s0', interval=5):
               f"{d['down_bytes_per_sec']:>14.0f} "
               f"{d['protocol']:<15} {d['priority']:>4}")
     print(f"{'='*75}\n")
-
     return all_devices
