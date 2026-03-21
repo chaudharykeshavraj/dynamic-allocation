@@ -15,7 +15,7 @@ from measure_bandwidth import (
     probe_real_capacity
 )
 from initiallize       import initiallize
-from dashboard         import app, live_state
+from dashboard         import app, live_state, update_history
 
 # ── Signal Handler ────────────────────────────────────────────
 def signal_handler(sig, frame):
@@ -154,6 +154,7 @@ while True:
     print("\nStep 6: Updating dashboard")
     live_state['devices'] = all_devices
     live_state['updated'] = datetime.now()
+    update_history(all_devices, live_state['updated'])
 
     print("\nCycle complete")
     interval_count += 1
