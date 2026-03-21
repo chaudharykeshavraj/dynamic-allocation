@@ -402,9 +402,8 @@ def main():
             import traceback
             traceback.print_exc()
         
-        # Wait before next interval
-        print(f"\nWaiting {INTERVAL} seconds for next capture...")
-        time.sleep(INTERVAL)
+        # no sleep needed — monitor() already blocks for INTERVAL seconds
+        # adding sleep here would make cycle = 2 × INTERVAL
 
 
 if __name__ == "__main__":
