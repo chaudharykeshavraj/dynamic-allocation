@@ -22,52 +22,233 @@ from scapy.all import sniff, IP
 INTERFACE = 'wlp3s0'
 INTERVAL = 5  # seconds
 
-# ── Priority Table ────────────────────────────────────────────
-PROTOCOL_PRIORITY = {
-    "WHATSAPP_CALL": 5, "ZOOM": 5, "SKYPE": 5, "GOOGLE_MEET": 5,
-    "DISCORD": 5, "VIBER_CALL": 5, "RTP": 5, "FACETIME": 5,
-    "VIBER_MESSAGE": 2, "STEAM": 4, "XBOX": 4, "PLAYSTATION": 4,
-    "ROBLOX": 4, "PUBG": 4, "SUPERCELL": 4, "FREEFIRE": 4,
-    "MOBILELEGENDS": 4, "YOUTUBE": 3, "NETFLIX": 3, "TIKTOK": 3,
-    "INSTAGRAM": 3, "FACEBOOK": 2, "TWITTER": 2, "ESEWA": 2,
-    "HTTP": 2, "HTTPS": 2, "BITTORRENT": 1, "UNKNOWN": 1,
+# ── RFC 4594 Traffic Classes → Internal Priority ──────────────
+#
+# RFC 4594 classifies traffic by LATENCY SENSITIVITY and ability
+# to recover from bandwidth shortage, not by social importance.
+#
+# RFC 4594 Class          DSCP   Priority  Rationale
+# ─────────────────────────────────────────────────────────────
+# Telephony (VoIP)        EF     5         <10ms latency, no buffer
+# Multimedia Conferencing AF41   5         Video call, interactive
+# Real-Time Interactive   CS4    4         Gaming: loss = unplayable
+# Multimedia Streaming    AF31   3         Buffered, degrades gracefully
+# Broadcast Video         CS3    3         Live stream, some buffer
+# Low-Latency Data        AF21   2         Web/social: elastic, retryable
+# High-Throughput Data    AF11   2         Downloads: fully elastic
+# Standard / Best Effort  DF     1         Background, unknown
+# Low-Priority Data       CS1    1         Bulk, scavenger traffic
+
+# ── Class 5: Telephony + Multimedia Conferencing (EF/AF41) ────
+TELEPHONY_CLASS = {
+    "ZOOM", "MICROSOFT_TEAMS", "GOOGLE_MEET",
+    "VIBER_CALL", "RTP", "FACETIME",
 }
 
-# ── nDPI → Our Protocol ───────────────────────────────────────
+# ── Class 4: Real-Time Interactive (CS4) ──────────────────────
+REALTIME_INTERACTIVE_CLASS = {
+    "STEAM", "XBOX", "PLAYSTATION", "ROBLOX",
+    "PUBG", "SUPERCELL", "FREEFIRE", "MOBILELEGENDS",
+}
+
+# ── Class 3: Multimedia Streaming (AF31/CS3) ──────────────────
+MULTIMEDIA_STREAMING_CLASS = {
+    "YOUTUBE", "NETFLIX", "TIKTOK", "INSTAGRAM",
+    "SPOTIFY", "APPLEPUSH", "APNS", "APPLE", "SNAPCHAT", "EDUCATION",
+}
+
+# ── Class 2: Low-Latency / High-Throughput Data (AF21/AF11) ───
+LOW_LATENCY_DATA_CLASS = {
+    "VIBER_MESSAGE", "FACEBOOK", "TWITTER", "WHATSAPP_MESSAGE", "DISCORD_MESSAGE",
+    "ESEWA", "KHALTI", "CONNECTIPS", "BANKING",
+    "MEROSHARE", "HAMROPATRO", "BUSSEWA",
+    "INDRIVE", "YANGO", "OPENAI", "ANTHROPIC",
+    "HTTP", "HTTPS", "HTTP_PROXY", "GOOGLE_PLAY",
+}
+
+# ── Class 1: Standard / Low-Priority (DF/CS1) ─────────────────
+BEST_EFFORT_CLASS = {
+    "BITTORRENT", "UNKNOWN",
+}
+
+# ── Build flat PROTOCOL_PRIORITY from class sets ──────────────
+_CLASS_TO_PRIORITY = [
+    (TELEPHONY_CLASS,            5),
+    (REALTIME_INTERACTIVE_CLASS, 4),
+    (MULTIMEDIA_STREAMING_CLASS, 3),
+    (LOW_LATENCY_DATA_CLASS,     2),
+    (BEST_EFFORT_CLASS,          1),
+]
+
+PROTOCOL_PRIORITY = {}
+for _class_set, _priority in _CLASS_TO_PRIORITY:
+    for _proto in _class_set:
+        PROTOCOL_PRIORITY[_proto] = _priority
+
+# ── nDPI/ndpiReader → Our Protocol ───────────────────────────
 NFSTREAM_TO_PROTOCOL = {
     "TLS.Instagram": "INSTAGRAM", "Instagram": "INSTAGRAM",
+    "Instagram_Video": "INSTAGRAM", "QUIC.Instagram": "INSTAGRAM",
     "TLS.Facebook": "FACEBOOK", "Facebook": "FACEBOOK",
-    "YouTube": "YOUTUBE", "Youtube": "YOUTUBE", "GoogleVideo": "YOUTUBE",
-    "WhatsApp": "WHATSAPP_CALL", "WhatsAppCall": "WHATSAPP_CALL",
+    "Facebook_Video": "FACEBOOK", "QUIC.Facebook": "FACEBOOK",
+    "DNS.Facebook": "FACEBOOK", "DNS.FACEBOOK": "FACEBOOK",
+    "STUN.FacebookVOIP": "FACEBOOK", "STUN.FACEBOOKVOIP": "FACEBOOK",
+    "YouTube": "YOUTUBE", "Youtube": "YOUTUBE", "YouTube_QUIC": "YOUTUBE",
+    "QUIC.YouTube": "YOUTUBE", "DNS.YouTube": "YOUTUBE",
+    "GoogleVideo": "YOUTUBE",
+    "WhatsApp": "WHATSAPP_MESSAGE", "WhatsAppCall": "WHATSAPP_MESSAGE",
+    "TLS.WhatsApp": "WHATSAPP_MESSAGE", "WhatsApp_VOIP": "WHATSAPP_MESSAGE",
+    "WhatsAppFiles": "WHATSAPP_MESSAGE", "DNS.WhatsApp": "WHATSAPP_MESSAGE",
     "Viber": "VIBER_MESSAGE", "ViberCall": "VIBER_CALL",
-    "Zoom": "ZOOM", "GoogleMeet": "GOOGLE_MEET", "Discord": "DISCORD",
-    "Skype": "SKYPE", "SkypeTeams": "SKYPE", "MicrosoftTeams": "SKYPE",
+    "Viber_VOIP": "VIBER_CALL", "QUIC.Viber": "VIBER_CALL",
+    "DNS.Viber": "VIBER_MESSAGE",
+    "Zoom": "ZOOM", "DNS.Zoom": "ZOOM",
+    "GoogleMeet": "GOOGLE_MEET", "Google_Meet": "GOOGLE_MEET",
+    "DNS.GoogleMeet": "GOOGLE_MEET",
+    "Discord": "DISCORD_MESSAGE", "DNS.Discord": "DISCORD_MESSAGE",
+    "Skype": "MICROSOFT_TEAMS", "SkypeTeams": "MICROSOFT_TEAMS",
+    "SKYPE_TEAMS": "MICROSOFT_TEAMS", "MicrosoftTeams": "MICROSOFT_TEAMS",
     "RTP": "RTP", "RTCP": "RTP", "SIP": "RTP", "STUN": "RTP",
-    "TikTok": "TIKTOK", "Netflix": "NETFLIX", "Twitter": "TWITTER",
-    "Steam": "STEAM", "Xbox": "XBOX", "PlayStation": "PLAYSTATION",
-    "Roblox": "ROBLOX", "BitTorrent": "BITTORRENT",
+    "TikTok": "TIKTOK", "DNS.TikTok": "TIKTOK",
+    "Netflix": "NETFLIX", "DNS.Netflix": "NETFLIX",
+    "Twitter": "TWITTER", "DNS.Twitter": "TWITTER",
+    "Steam": "STEAM", "SteamGame": "STEAM",
+    "Blizzard": "SUPERCELL", "EpicGames": "PUBG", "RiotGames": "PUBG",
+    "Xbox": "XBOX", "PlayStation": "PLAYSTATION", "Roblox": "ROBLOX",
+    "GeForceNow": "STEAM",
+    "GoogleServices": "HTTPS", "GOOGLESERVICES": "HTTPS",
+    "QUIC.GoogleServices": "HTTPS", "GoogleDrive": "HTTPS",
+    "MS_OneDrive": "HTTPS",
+    "BitTorrent": "BITTORRENT", "Bittorrent": "BITTORRENT",
+    "uTorrent": "BITTORRENT",
     "TLS": "HTTPS", "SSL": "HTTPS", "QUIC": "HTTPS",
+    "Spotify": "SPOTIFY", "TLS.Spotify": "SPOTIFY",
+    "QUIC.Spotify": "SPOTIFY", "DNS.Spotify": "SPOTIFY",
+    "ApplePush": "APPLEPUSH", "APPLEPUSH": "APPLEPUSH",
+    "AppleID": "APPLE", "Apple": "APPLE",
+    "TLS.Apple": "APPLE", "DNS.Apple": "APPLE",
+    "HTTP_Proxy": "HTTP_PROXY", "HTTPProxy": "HTTP_PROXY",
+    "GooglePlay": "GOOGLE_PLAY", "TLS.GooglePlay": "GOOGLE_PLAY",
+    "Snapchat": "SNAPCHAT", "TLS.Snapchat": "SNAPCHAT",
+    "coursera": "EDUCATION", "edx": "EDUCATION", "udemy": "EDUCATION", "khanacademy": "EDUCATION",
+    "duolingo": "EDUCATION", "skillshare": "EDUCATION", 
 }
 
 # ── IP Range → Protocol ───────────────────────────────────────
 IP_TO_PROTOCOL = [
-    ("142.250.", "YOUTUBE"), ("216.58.", "YOUTUBE"), ("172.217.", "YOUTUBE"), ("74.125.", "YOUTUBE"),
-    ("157.240.", "FACEBOOK"), ("179.60.", "FACEBOOK"), ("31.13.", "FACEBOOK"),
-    ("50.22.", "WHATSAPP_CALL"), ("54.148.", "WHATSAPP_CALL"),
-    ("23.246.", "NETFLIX"), ("37.77.", "NETFLIX"),
-    ("161.117.", "TIKTOK"), ("103.45.", "TIKTOK"),
-    ("3.7.", "ZOOM"), ("99.79.", "ZOOM"),
-    ("162.159.", "DISCORD"), ("66.22.", "DISCORD"),
-    ("93.184.", "SUPERCELL"), ("185.60.", "SUPERCELL"),
-    ("103.28.", "PUBG"), ("110.93.", "PUBG"),
-    ("5.0.", "VIBER_CALL"), ("45.33.", "VIBER_MESSAGE"),
-    ("74.125.", "GOOGLE_MEET"), ("108.177.", "GOOGLE_MEET"),
+    ("142.250.", "YOUTUBE"), ("216.58.",  "YOUTUBE"),
+    ("172.217.", "YOUTUBE"), ("74.125.",  "YOUTUBE"),
+    ("216.239.", "YOUTUBE"), ("124.41.",  "YOUTUBE"),
+    ("157.240.", "INSTAGRAM"), ("179.60.", "INSTAGRAM"),
+    ("31.13.",   "FACEBOOK"),  ("66.220.", "FACEBOOK"),
+    ("69.63.",   "FACEBOOK"),  ("103.211.","INSTAGRAM"),
+    ("50.22.",   "WHATSAPP_CALL"), ("54.148.", "WHATSAPP_CALL"),
+    ("23.246.",  "NETFLIX"),   ("37.77.",   "NETFLIX"),
+    ("198.38.",  "NETFLIX"),
+    ("161.117.", "TIKTOK"),    ("103.45.", "TIKTOK"),
+    ("120.232.", "TIKTOK"),
+    ("3.7.",     "ZOOM"),      ("99.79.",  "ZOOM"),
+    ("170.114.", "ZOOM"),
+    ("162.159.", "DISCORD_MESSAGE"),   ("66.22.",  "DISCORD_MESSAGE"),
+    ("57.144.",  "SPOTIFY"),
+    ("17.57.",   "APPLE"),     ("17.248.", "APPLE"),
+    ("17.172.",  "APPLE"),
+    ("139.5.",   "GOOGLE_PLAY"),
+    ("93.184.",  "SUPERCELL"), ("185.60.", "SUPERCELL"),
+    ("103.28.",  "PUBG"),      ("110.93.", "PUBG"),
+    # ── Nepali services ──────────────────────────────────────
+    # ("103.69.",  "ESEWA"),     ("103.1.",  "ESEWA"),
+    ("202.51.",  "KHALTI"),    ("103.90.", "KHALTI"),
+    ("202.166.", "CONNECTIPS"),
+    ("202.79.",  "MEROSHARE"),
+    # ── Other ────────────────────────────────────────────────
+    ("5.0.",     "VIBER_CALL"),  ("45.33.", "VIBER_MESSAGE"),
+    ("108.177.", "GOOGLE_MEET"), ("185.25.", "STEAM"),
 ]
 
+# ── Port → Protocol ───────────────────────────────────────────
 PORT_TO_PROTOCOL = {
-    10012: "PUBG", 7777: "PUBG", 9339: "SUPERCELL", 9340: "SUPERCELL",
-    5060: "RTP", 5061: "RTP", 3478: "RTP", 3479: "RTP",
-    4244: "WHATSAPP_CALL", 8801: "ZOOM", 8802: "ZOOM", 50000: "DISCORD",
+    10012: "PUBG",    7777:  "PUBG",
+    9339:  "SUPERCELL", 9340: "SUPERCELL",
+    40000: "MOBILELEGENDS", 5555: "MOBILELEGENDS",
+    5060:  "RTP",  5061: "RTP", 3478: "RTP", 3479: "RTP",
+    4244:  "WHATSAPP_CALL", 5242: "WHATSAPP_CALL",
+    8801:  "ZOOM", 8802: "ZOOM",
+    50000: "DISCORD_MESSAGE",
+    5222:  "SPOTIFY",
+    5228:  "GOOGLE_PLAY",
+    2195:  "APPLEPUSH", 2196: "APPLEPUSH",
+}
+
+# ── SNI Domain → Protocol ─────────────────────────────────────
+# SNI (Server Name Indication) is transmitted in plaintext inside
+# the TLS ClientHello handshake — visible even for HTTPS traffic.
+# This allows detection of any TLS-based application by its domain
+# name without relying on nDPI's fixed protocol database.
+# This is the primary method for detecting Nepali apps and any
+# other apps not in nDPI's database.
+
+SNI_TO_PROTOCOL = {
+    # ── Nepali fintech ────────────────────────────────────────
+    "esewa.com.np"           : "ESEWA",
+    "esewa.com"              : "ESEWA",
+    "khalti.com"             : "KHALTI",
+    "api.khalti.com"         : "KHALTI",
+    "connectips.com"         : "CONNECTIPS",
+    "nchl.com.np"            : "CONNECTIPS",
+    "meroshare.com.np"       : "MEROSHARE",
+    "meroshare.cdsc.com.np"  : "MEROSHARE",
+    # ── Nepali apps ───────────────────────────────────────────
+    "hamropatro.com"         : "HAMROPATRO",
+    "bussewa.com"            : "BUSSEWA",
+    "api.bussewa.com"        : "BUSSEWA",
+    "indrive.com"            : "INDRIVE",
+    "yango.com"              : "YANGO",
+    # ── Nepali banking ────────────────────────────────────────
+    "nabilbank.com"          : "BANKING",
+    "nimb.com.np"            : "BANKING",
+    "everestbankltd.com"     : "BANKING",
+    "nicasiabank.com"        : "BANKING",
+    "kumaribank.com"         : "BANKING",
+    "primecommercialbank.com": "BANKING",
+    "siddarthbank.com"       : "BANKING",
+    "globalimebank.com"      : "BANKING",
+    # ── International ─────────────────────────────────────────
+    "api.openai.com"         : "OPENAI",
+    "chatgpt.com"            : "OPENAI",
+    "claude.ai"              : "ANTHROPIC",
+    "snapchat.com"           : "SNAPCHAT",
+    "sc-cdn.net"             : "SNAPCHAT",
+    "open.spotify.com"       : "SPOTIFY",
+    "spclient.wg.spotify.com": "SPOTIFY",
+    "discord.com"            : "DISCORD_MESSAGE",
+    "discordapp.com"         : "DISCORD_MESSAGE",
+    "gateway.discord.gg"     : "DISCORD_MESSAGE",
+    "youtube.com"            : "YOUTUBE",
+    "googlevideo.com"        : "YOUTUBE",
+    "ytimg.com"              : "YOUTUBE",
+    "netflix.com"            : "NETFLIX",
+    "nflxvideo.net"          : "NETFLIX",
+    "instagram.com"          : "INSTAGRAM",
+    "cdninstagram.com"       : "INSTAGRAM",
+    "facebook.com"           : "FACEBOOK",
+    "fbcdn.net"              : "FACEBOOK",
+    "whatsapp.com"           : "WHATSAPP_MESSAGE",
+    "whatsapp.net"           : "WHATSAPP_MESSAGE",
+    "zoom.us"                : "ZOOM",
+    "tiktok.com"             : "TIKTOK",
+    "tiktokcdn.com"          : "TIKTOK",
+    "roblox.com"             : "ROBLOX",
+    "rbxcdn.com"             : "ROBLOX",
+    "steampowered.com"       : "STEAM",
+    "steamcontent.com"       : "STEAM",
+    # ── Education ─────────────────────
+    "coursera.org"           : "EDUCATION",
+    "edx.org"                : "EDUCATION",
+    "udemy.com"              : "EDUCATION",
+    "khanacademy.org"        : "EDUCATION",
+    "duolingo.com"           : "EDUCATION",
+    "skillshare.com"         : "EDUCATION"
 }
 
 _protocol_cache = {}

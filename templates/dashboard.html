@@ -2,7 +2,6 @@
 <html>
 <head>
     <title>Bandwidth Allocation Dashboard</title>
-    <!-- AJAX polling replaces meta refresh — page stays alive, charts persist -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
     <style>
         body {
@@ -22,7 +21,6 @@
         }
         .header h2 { margin: 0; font-size: 28px; }
         .header p  { margin: 5px 0 0 0; opacity: 0.9; font-size: 14px; }
-
         .stats {
             display: flex;
             gap: 15px;
@@ -61,7 +59,6 @@
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
         .update strong { color: #2c3e50; }
-
         table {
             width: 100%;
             background: white;
@@ -86,10 +83,8 @@
             font-size: 14px;
         }
         tr:hover { background-color: #f9f9f9; }
-
         .active   { color: #27ae60; font-weight: bold; }
         .inactive { color: #e74c3c; font-weight: bold; }
-
         .ip-address {
             font-family: 'Consolas', 'Monaco', monospace;
             background: #f8f9fa;
@@ -118,13 +113,6 @@
             background: #e74c3c;
             margin-right: 8px;
         }
-        .warning {
-            background: #fff3cd;
-            border-left: 4px solid #ffc107;
-            padding: 10px;
-            margin: 10px 0;
-            border-radius: 4px;
-        }
         .priority {
             display: inline-block;
             padding: 3px 10px;
@@ -138,11 +126,18 @@
         .priority-3 { background: #f39c12; }
         .priority-4 { background: #e67e22; }
         .priority-5 { background: #e74c3c; }
-
+        
+        /* Protocol text style - no background */
+        .protocol-text {
+            font-weight: 500;
+            color: #2c3e50;
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: 0.5px;
+        }
+        
         .bw-down { color: #2980b9; }
         .bw-up   { color: #27ae60; }
-
-        /* ── match / mismatch badge ── */
         .badge-match {
             display: inline-block;
             padding: 3px 10px;
@@ -163,8 +158,6 @@
             background: #e74c3c;
             margin-left: 8px;
         }
-
-        /* ── chart cards ── */
         .chart-card {
             background: white;
             border-radius: 8px;
@@ -199,7 +192,6 @@
         <p>Real-time monitoring | Dynamic bandwidth allocation | Auto-refresh: 5 seconds</p>
     </div>
 
-    <!-- ── Stats cards ── -->
     <div class="stats">
         <div class="stat">
             <div class="stat-number" id="stat-devices">{{ totals.devices }}</div>
@@ -232,11 +224,17 @@
         Auto-refresh every 5 seconds
     </div>
 
-    <!-- ── Table ── -->
+    <!-- color legend -->
+    <div style="margin-bottom: 8px; font-size: 12px; color: #7f8c8d;">
+        <span class="bw-down">■</span> Download &nbsp;&nbsp;
+        <span class="bw-up">■</span> Upload
+    </div>
+
     <table>
         <thead>
             <tr>
                 <th>IP Address</th>
+                <th>Protocol</th>
                 <th>Priority</th>
                 <th>Demand (Mbps)</th>
                 <th>Allocated (Mbps)</th>
@@ -248,10 +246,15 @@
             {% for device in devices %}
             <tr>
                 <td><span class="ip-address">{{ device.ip }}</span></td>
+                <td><span class="protocol-text">{{ device.protocol }}</span></td>
                 <td>
                     <span class="priority priority-{{ device.priority }}">{{ device.priority }}</span>
                 </td>
-                <td>{{ "%.2f"|format(device.demand) }}</td>
+                <td>
+                    <span class="bw-down">{{ "%.2f"|format(device.demand_down) }}</span>
+                    &nbsp;/&nbsp;
+                    <span class="bw-up">{{ "%.2f"|format(device.demand_up) }}</span>
+                </td>
                 <td>
                     <span class="bw-down">{{ "%.2f"|format(device.down_allocated) }}</span>
                     &nbsp;/&nbsp;
@@ -274,11 +277,6 @@
         </tbody>
     </table>
 
-    <!-- ── Per-device line charts ── -->
-    <div class="chart-card">
-        <h3>Per-Device Bandwidth Trend (Demand / Allocated / Enforced)</h3>
-    </div>
-
     <div id="device-chart-grid" class="charts-grid"></div>
 
     <div style="text-align: center; margin-top: 20px; color: #95a5a6; font-size: 12px;">
@@ -286,7 +284,6 @@
     </div>
 
     <script>
-        // ── initial data from Jinja (first page load) ──
         let currentDevices = {{ devices | tojson }};
         let currentHistory = {{ history | tojson }};
 
@@ -354,9 +351,9 @@
                     data: {
                         labels: series.time || [],
                         datasets: [
-                            buildLineDataset('Demand (Mbps)', series.demand || [], SERIES_COLORS.demand),
+                            buildLineDataset('Demand (Mbps)',    series.demand    || [], SERIES_COLORS.demand),
                             buildLineDataset('Allocated (Mbps)', series.allocated || [], SERIES_COLORS.allocated),
-                            buildLineDataset('Enforced (Mbps)', series.enforced || [], SERIES_COLORS.enforced),
+                            buildLineDataset('Enforced (Mbps)',  series.enforced  || [], SERIES_COLORS.enforced),
                         ],
                     },
                     options: {
@@ -384,7 +381,6 @@
             }
         }
 
-        // ── update functions ──
         function updateStats(totals) {
             document.getElementById('stat-devices').textContent    = totals.devices;
             document.getElementById('stat-demand').textContent     = totals.demand.toFixed(2);
@@ -408,8 +404,13 @@
 
                 html += `<tr>
                     <td><span class="ip-address">${d.ip}</span></td>
+                    <td><span class="protocol-text">${d.protocol || 'UNKNOWN'}</span></td>
                     <td><span class="priority priority-${d.priority}">${d.priority}</span></td>
-                    <td>${d.demand.toFixed(2)}</td>
+                    <td>
+                        <span class="bw-down">${d.demand_down.toFixed(2)}</span>
+                        &nbsp;/&nbsp;
+                        <span class="bw-up">${d.demand_up.toFixed(2)}</span>
+                    </td>
                     <td>
                         <span class="bw-down">${d.down_allocated.toFixed(2)}</span>
                         &nbsp;/&nbsp;
@@ -429,7 +430,6 @@
 
         renderDeviceCharts(currentHistory);
 
-        // ── AJAX polling — fetch /api/data every 5 seconds ──
         setInterval(async () => {
             try {
                 const resp = await fetch('/api/data');

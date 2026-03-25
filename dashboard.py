@@ -88,26 +88,23 @@ def build_devices():
         demand_up_bps      = device.get('up_bytes_per_sec', 0)
         demand_bps         = demand_down_bps + demand_up_bps
 
-        # actual throughput written by enforce.py read_stats()
-        # = real bytes/sec that flowed through tc last interval
-        # first cycle per device shows 0 → correct from second cycle onward
         enforced_down_bps = device.get('enforced_down_bps', 0)
         enforced_up_bps   = device.get('enforced_up_bps',   0)
 
         allocated_total = allocated_down_bps + allocated_up_bps
         enforced_total  = enforced_down_bps  + enforced_up_bps
 
-        # is_match: did actual enforced throughput land within 10% of allocation?
-        # compares real traffic (enforced) against mathematical target (allocated)
-        # not the tc configured rate — that always equals allocated exactly
+        protocol = device.get('protocol', 'UNKNOWN')
+
         if allocated_total > 0:
             deviation = abs(enforced_total - allocated_total) / allocated_total
             is_match  = deviation <= MATCH_TOLERANCE
         else:
-            is_match = True  # no allocation → nothing to match
+            is_match = True
 
         devices.append({
             'ip'             : device.get('ip', ''),
+            'protocol'       : protocol,
             'priority'       : device.get('priority', 1),
             'demand'         : round((demand_bps         * 8) / 1_000_000, 2),
             'demand_down'    : round((demand_down_bps    * 8) / 1_000_000, 2),
@@ -119,7 +116,7 @@ def build_devices():
             'enforced_down'  : round((enforced_down_bps  * 8) / 1_000_000, 2),
             'enforced_up'    : round((enforced_up_bps    * 8) / 1_000_000, 2),
             'is_match'       : is_match,
-            'status'         : 'active' if demand_bps > 0 else 'idle',
+            'status'         : 'active' if (demand_bps > 1000) else 'idle',
         })
 
     return devices
