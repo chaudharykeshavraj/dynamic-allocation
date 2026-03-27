@@ -29,7 +29,7 @@ def allocate(all_devices, download_bytes_per_sec, upload_bytes_per_sec):
     fair_share_up = upload_bytes_per_sec / n_total
 
     # Equation 4.4: Full Minimum Allocation
-    full_min_down = ALPHA * fair_share_down
+    full_min_down = ALPHA * fair_share_down     # ALPHA = 0.2 means 20% of fair share as minimum
     full_min_up = ALPHA * fair_share_up
 
     print(f"  Fair Share: Down={fair_share_down/1e6:.2f} Mbps, Up={fair_share_up/1e6:.2f} Mbps")

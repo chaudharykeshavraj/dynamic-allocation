@@ -37,6 +37,7 @@ AVG_PACKET_SIZE = 1200   # tc drops PACKETS not bytes
 TELEPHONY_CLASS = {
     "ZOOM", "MICROSOFT_TEAMS", "GOOGLE_MEET",
     "VIBER_CALL", "RTP", "FACETIME",
+    "FACEBOOK_VOIP", "STUN.FacebookVOIP",  # Added missing Facebook VoIP
 }
 
 # ── Class 4: Real-Time Interactive (CS4) ──────────────────────
@@ -49,12 +50,12 @@ REALTIME_INTERACTIVE_CLASS = {
 MULTIMEDIA_STREAMING_CLASS = {
     "YOUTUBE", "NETFLIX", "TIKTOK", "INSTAGRAM",
     "SPOTIFY", "APPLEPUSH", "APNS", "APPLE", "SNAPCHAT", "EDUCATION",
+    "ESEWA", "KHALTI", "CONNECTIPS", "BANKING",
 }
 
 # ── Class 2: Low-Latency / High-Throughput Data (AF21/AF11) ───
 LOW_LATENCY_DATA_CLASS = {
     "VIBER_MESSAGE", "FACEBOOK", "TWITTER", "WHATSAPP_MESSAGE", "DISCORD_MESSAGE",
-    "ESEWA", "KHALTI", "CONNECTIPS", "BANKING",
     "MEROSHARE", "HAMROPATRO", "BUSSEWA",
     "INDRIVE", "YANGO", "OPENAI", "ANTHROPIC",
     "HTTP", "HTTPS", "HTTP_PROXY", "GOOGLE_PLAY",
@@ -86,7 +87,8 @@ NFSTREAM_TO_PROTOCOL = {
     "TLS.Facebook": "FACEBOOK", "Facebook": "FACEBOOK",
     "Facebook_Video": "FACEBOOK", "QUIC.Facebook": "FACEBOOK",
     "DNS.Facebook": "FACEBOOK", "DNS.FACEBOOK": "FACEBOOK",
-    "STUN.FacebookVOIP": "FACEBOOK", "STUN.FACEBOOKVOIP": "FACEBOOK",
+    "STUN.FacebookVOIP": "FACEBOOK_VOIP",  # Changed from FACEBOOK to FACEBOOK_VOIP
+    "STUN.FACEBOOKVOIP": "FACEBOOK_VOIP",
     "YouTube": "YOUTUBE", "Youtube": "YOUTUBE", "YouTube_QUIC": "YOUTUBE",
     "QUIC.YouTube": "YOUTUBE", "DNS.YouTube": "YOUTUBE",
     "GoogleVideo": "YOUTUBE",
@@ -207,6 +209,8 @@ SNI_TO_PROTOCOL = {
     "primecommercialbank.com": "BANKING",
     "siddarthbank.com"       : "BANKING",
     "globalimebank.com"      : "BANKING",
+    "laxmisunrise.com"       : "BANKING",
+    "citizensbank.com"       : "BANKING",
     # ── International ─────────────────────────────────────────
     "api.openai.com"         : "OPENAI",
     "chatgpt.com"            : "OPENAI",
@@ -227,9 +231,7 @@ SNI_TO_PROTOCOL = {
     "ytimg.com"              : "YOUTUBE",
     "netflix.com"            : "NETFLIX",
     "nflxvideo.net"          : "NETFLIX",
-    "instagram.com"          : "INSTAGRAM",
     "cdninstagram.com"       : "INSTAGRAM",
-    "facebook.com"           : "FACEBOOK",
     "fbcdn.net"              : "FACEBOOK",
     "whatsapp.com"           : "WHATSAPP_MESSAGE",
     "whatsapp.net"           : "WHATSAPP_MESSAGE",
@@ -238,8 +240,8 @@ SNI_TO_PROTOCOL = {
     "tiktokcdn.com"          : "TIKTOK",
     "roblox.com"             : "ROBLOX",
     "rbxcdn.com"             : "ROBLOX",
-    "steampowered.com"       : "STEAM",
-    "steamcontent.com"       : "STEAM",
+    "store.steampowered.com" : "STEAM",
+    "steamcommunity.com"     : "STEAM",
     # ── Education ─────────────────────
     "coursera.org"           : "EDUCATION",
     "edx.org"                : "EDUCATION",
@@ -613,8 +615,8 @@ def get_tc_demand_boost(interface, interval):
 
 
 def monitor(interface='wlp3s0', interval=5):
-    tx_bytes     = {}
-    rx_bytes     = {}
+    tx_bytes     = {}       # Upload bytes (device → internet)
+    rx_bytes     = {}       # Download bytes (internet → device)
     flows_result = [None]
 
     def count_packet(pkt):
@@ -638,8 +640,10 @@ def monitor(interface='wlp3s0', interval=5):
         dst_ip = pkt[IP].dst
         size   = len(pkt)
 
+        # Device uploading
         if src_ip.startswith("192.168."):
             tx_bytes[src_ip] = tx_bytes.get(src_ip, 0) + size
+        # Device downloading
         if dst_ip.startswith("192.168."):
             rx_bytes[dst_ip] = rx_bytes.get(dst_ip, 0) + size
 
@@ -649,7 +653,7 @@ def monitor(interface='wlp3s0', interval=5):
                 and src_ip.startswith("192.168.")):
             sni = extract_sni(bytes(pkt[Raw].load))
             if sni:
-                proto = identify_from_sni(sni)
+                proto = identify_from_sni(sni)      # Detects Nepali apps like Sewa, Yango, etc.
                 if proto:
                     _sni_cache[src_ip] = (proto, time.time())
                     print(f"  [SNI] {src_ip} → {sni} → {proto}")
@@ -666,7 +670,7 @@ def monitor(interface='wlp3s0', interval=5):
     flows     = flows_result[0] or []
     ndpi_data = aggregate_flows(flows)
 
-    ip_extra_down, ip_extra_up = get_tc_demand_boost(interface, interval)
+    ip_extra_down, ip_extra_up = get_tc_demand_boost(interface, interval)   # Call the fuction to get dropped bytes per IP
 
     all_ips = set(tx_bytes.keys()) | set(rx_bytes.keys()) | set(ndpi_data.keys())
     all_ips -= EXCLUDED_DEVICE_IPS

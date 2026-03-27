@@ -280,14 +280,14 @@ def setup_tc(interface, download_bytes_per_sec, upload_bytes_per_sec):
 def ensure_device_tc_rules(device, class_id, interface):
     """Ensure tc classes and filters exist - ONLY create if missing, never delete"""
     ip = device['ip']
-    down_kbits = max(1, int((device['allocated_bytes_download'] * 8) / 1000))
-    up_kbits = max(1, int((device['allocated_bytes_upload'] * 8) / 1000))
-    down_burst = max(15, down_kbits // 8)
-    up_burst = max(15, up_kbits // 8)
+    down_kbits  = max(1, int((device['allocated_bytes_download'] * 8) / 1000))
+    up_kbits    = max(1, int((device['allocated_bytes_upload'] * 8) / 1000))
+    down_burst  = max(15, down_kbits // 8)
+    up_burst    = max(15, up_kbits // 8)
 
     # Check if class exists
-    down_check = subprocess.run(f"tc class show dev {interface} | grep -q '1:{class_id}'", shell=True, capture_output=True)
-    up_check = subprocess.run(f"tc class show dev ifb0 | grep -q '1:{class_id}'", shell=True, capture_output=True)
+    down_check  = subprocess.run(f"tc class show dev {interface} | grep -q '1:{class_id}'", shell=True, capture_output=True)
+    up_check    = subprocess.run(f"tc class show dev ifb0 | grep -q '1:{class_id}'", shell=True, capture_output=True)
     
     # Create class if missing (first time only)
     if down_check.returncode != 0:
